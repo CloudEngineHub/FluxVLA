@@ -27,6 +27,8 @@ model = dict(
         hidden_size=1024,
         input_embedding_dim=1536,
         num_inference_timesteps=4,
+        noise_beta_alpha=1.0,
+        noise_beta_beta=1.5,
         action_dim=32,
         ori_action_dim=7),
     freeze_vlm_backbone=False,
@@ -70,6 +72,7 @@ train_dataloader = dict(
     dataset=dict(
         type='DistributedRepeatingDataset',
         seed=7,
+        reshuffle_each_epoch=True,
         name_mappings={
             'observation.state': ['proprio'],
             'action': ['action']
@@ -79,7 +82,7 @@ train_dataloader = dict(
         datasets=dict(
             type='ParquetDataset',
             data_root_path=  # noqa: E251
-            'datasets/libero_10_no_noops_lerobotv2.1',  # noqa: E501
+            'datasets/libero_10_lerobotv2.1',  # noqa: E501
             transforms=[
                 dict(
                     type='ProcessParquetInputs',

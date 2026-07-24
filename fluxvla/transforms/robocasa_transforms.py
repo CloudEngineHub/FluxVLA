@@ -199,14 +199,22 @@ class ProcessRobocasaEvalInputs:
                  resize_size: int = 224,
                  center_crop_scale: Optional[float] = None,
                  normalize: bool = True,
+                 value_range: str = 'unit',
                  embodiment_id: Optional[int] = None):
         if center_crop_scale is not None and not (0 < center_crop_scale <= 1):
             raise ValueError(f'center_crop_scale must be in (0, 1], got '
                              f'{center_crop_scale}')
+        if value_range not in ('unit', 'tanh'):
+            raise ValueError(
+                f"value_range must be 'unit' ([0, 1]) or 'tanh' ([-1, 1]), "
+                f'got {value_range}')
         self.img_key = img_key
         self.resize_size = resize_size
         self.center_crop_scale = center_crop_scale
         self.normalize = normalize
+        # 'unit' -> [0, 1]; 'tanh' -> [-1, 1]. Must match the training-time
+        # image normalization (e.g. SimpleNormalizeImages maps to [-1, 1]).
+        self.value_range = value_range
         # Keep the signature aligned with training ProcessParquetInputs.
         self.embodiment_id = embodiment_id
 
@@ -238,8 +246,10 @@ class ProcessRobocasaEvalInputs:
                 img = cv2.resize(img, (self.resize_size, self.resize_size))
 
             if self.normalize:
-                # PI0.5 path: uint8 [0, 255] -> float32 [0, 1].
+                # PI0.5 path: uint8 [0, 255] -> float32 [0, 1] (or [-1, 1]).
                 img = img.astype(np.float32) / 255.0
+                if self.value_range == 'tanh':
+                    img = img * 2.0 - 1.0
                 # HWC -> CHW.
                 img = np.transpose(img, (2, 0, 1))  # (3, 224, 224)
                 # Convert to tensor.
@@ -289,15 +299,17 @@ class DenormalizeRobocasaAction:
     Differences from DenormalizeLiberoAction:
     - no ``_no_noops`` suffix on the statistics key
     - no gripper binarization or inversion post-processing
-    - min-max normalization by default
+    - supports the same quantile normalization used by PI0.5 upstream
 
     Args:
         norm_stats: Normalization statistics path or dict.
         action_dim: Number of active RoboCasa action dimensions.
-        norm_type: Normalization type.
+        norm_type: Normalization type (``quantile``, ``min_max``, or
+            ``mean_std``).
         clip_actions: If True, clip normalized actions to [-1, 1] first.
-        stats_order: Order of the flat action statistics. Only ``fluxvla`` is
-            supported by this transform.
+        stats_order: Order of the flat action statistics. Use ``native`` when
+            statistics already match the predicted action order, or ``fluxvla``
+            / ``fluxvla_to_n15`` to convert FluxVLA-order statistics to N1.5.
     """
 
     def __init__(self,
@@ -305,7 +317,7 @@ class DenormalizeRobocasaAction:
                  action_dim: int = 29,
                  norm_type: str = 'min_max',
                  clip_actions: bool = False,
-                 stats_order: str = 'fluxvla'):
+                 stats_order: str = 'native'):
         if isinstance(norm_stats, str):
             with open(norm_stats, 'r', encoding='utf-8') as f:
                 self.norm_stats = json.load(f)
@@ -314,13 +326,15 @@ class DenormalizeRobocasaAction:
         self.action_dim = action_dim
         self.norm_type = norm_type
         self.clip_actions = clip_actions
-        if stats_order != 'fluxvla':
+        if stats_order not in ('native', 'fluxvla', 'fluxvla_to_n15'):
             raise ValueError(
                 f'Unsupported stats_order={stats_order}. '
-                'Only existing FluxVLA RoboCasa statistics are supported.')
-        self.stats_permutation = np.array(
-            _robocasa_gr1_permutation(ROBOCASA_GR1_FLUXVLA_ORDER),
-            dtype=np.int64)
+                "Expected 'native', 'fluxvla', or 'fluxvla_to_n15'.")
+        self.stats_permutation = (
+            np.array(
+                _robocasa_gr1_permutation(ROBOCASA_GR1_FLUXVLA_ORDER),
+                dtype=np.int64) if stats_order in ('fluxvla',
+                                                   'fluxvla_to_n15') else None)
 
     def __call__(self, data: Dict) -> np.ndarray:
         """Denormalize one predicted action.
@@ -345,7 +359,9 @@ class DenormalizeRobocasaAction:
         # Keep only the active action dimensions.
         action = action[:self.action_dim]
 
-        if self.norm_type == 'min_max':
+        if self.norm_type == 'quantile':
+            action = self._denormalize_quantile(action, action_stats)
+        elif self.norm_type == 'min_max':
             action = self._denormalize_min_max(action, action_stats)
         elif self.norm_type == 'mean_std':
             mean = np.array(action_stats['mean'])[:self.action_dim]
@@ -356,7 +372,21 @@ class DenormalizeRobocasaAction:
 
         return action
 
+    def _denormalize_quantile(self, action: np.ndarray,
+                              stats: Dict) -> np.ndarray:
+        """Map PI0.5 actions from [-1, 1] back through q01/q99 stats."""
+        if stats.get('q01') is None or stats.get('q99') is None:
+            raise ValueError(
+                'Quantile denormalization requires non-null q01/q99 stats.')
+        low = np.asarray(stats['q01'])[:self.action_dim]
+        high = np.asarray(stats['q99'])[:self.action_dim]
+        if self.clip_actions:
+            action = np.clip(action, -1.0, 1.0)
+        return 0.5 * (action + 1.0) * (high - low + 1e-6) + low
+
     def _reorder_action_stats(self, action_stats: Dict) -> Dict:
+        if self.stats_permutation is None:
+            return action_stats
         action_stats = copy.deepcopy(action_stats)
         for key in ('min', 'max', 'mean', 'std', 'q01', 'q99'):
             values = action_stats.get(key)

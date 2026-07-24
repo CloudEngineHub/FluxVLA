@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+seed = 7
+
 model = dict(
     type='OpenVLA',
     vision_backbone=dict(
@@ -35,7 +37,8 @@ model = dict(
         './checkpoints/Llama-2-7b-hf',  # noqa: E501
         llm_max_length=2048,
         hf_token=None,
-        inference_mode=False),
+        inference_mode=False,
+        pad_token_id=32000),
     projector=dict(
         type='FusedMLPProjector', fused_vision_dim=2176, llm_dim=4096),
     tokenizer=dict(
@@ -53,6 +56,8 @@ model = dict(
     freeze_llm_backbone=False,
     freeze_projector=False,
     use_lora=True,
+    # Keep the known-good 87a24a0 adapter recipe. Increasing adapter
+    # capacity and adding dropout regressed all evaluated LIBERO suites.
     lora_rank=32,
     lora_alpha=16,
     lora_dropout=0.0,
@@ -102,6 +107,7 @@ train_dataloader = dict(
                         0.3246428668498993,
                         1.0,
                     ],
+                    mask=[True, True, True, True, True, True, False],
                 ), ), ),
         datasets=dict(
             type='ParquetDataset',
@@ -136,6 +142,7 @@ train_dataloader = dict(
                     state_norm_type='min_max',
                     action_norm_type='quantile',
                     clip_norm=True,
+                    normalization_epsilon=1e-8,
                     action_norm_mask=[
                         True,
                         True,
@@ -170,8 +177,16 @@ train_dataloader = dict(
                 ),
                 dict(
                     type='ResizeImagesLanczos',
+                    height=256,
+                    width=256,
+                    backend='tensorflow',
+                ),
+                dict(
+                    type='ResizeImagesLanczos',
                     height=224,
                     width=224,
+                    backend='tensorflow',
+                    jpeg_roundtrip=True,
                 ),
                 dict(
                     type='AugImage',
@@ -184,6 +199,7 @@ train_dataloader = dict(
                     saturation_range=(0.8, 1.2),
                     hue_delta=0.05,
                     share_across_dinosiglip=True,
+                    backend='tensorflow',
                 ),
                 dict(
                     type='NormalizeImages',
@@ -210,7 +226,7 @@ runner = dict(
     optimizer=dict(lr=5e-4, type='AdamW', weight_decay=None),
     max_grad_norm=None,
     save_iter_interval=5000,
-    max_keep_ckpts=1,
+    max_keep_ckpts=3,
     sampler=None,
     collator=dict(
         type='PaddedCollatorForActionPrediction',
@@ -242,7 +258,9 @@ eval = dict(
                 type='ProcessLiberoEvalInputs',
                 img_keys=['agentview_image', 'agentview_image'],
                 center_crop=True,
-                resize_size=224),
+                resize_size=224,
+                resize_backend='tensorflow',
+                jpeg_roundtrip=True),
             dict(
                 type='TransformImage',
                 image_resize_strategy='resize-naive',
