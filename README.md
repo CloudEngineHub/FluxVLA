@@ -55,7 +55,11 @@ FluxVLA Engine is a full-stack, end-to-end engineering platform for deploying em
 
 ## 📢 Latest News
 
+**\[2026/08/10\]** 🔥 FluxVLA deployment on NVIDIA Jetson Orin is now supported, with edge inference acceleration reaching 7.4 Hz for GR00T-N1.5. See [orin_flashing.md](docs/orin_flashing.md) for initial flashing and [orin_docker_runtime.md](docs/orin_docker_runtime.md) to start the FluxVLA Docker setup.
+
 **\[2026/06/30\]** 🔥 Single-arm and dual-arm Franka real-robot inference is now supported, including joint/eepose control configs and a deployment guide. See [docs/franka.md](docs/franka.md).
+
+**\[2026/06/25\]** 🔥 GR00T-RTC-accelerated inference is now supported, achieving 45 Hz on an RTX 5090.
 
 **\[2026/06/22\]** 🔥 A minimal Oli humanoid whole-body (loco-manipulation) real-robot inference path (operator + runner + example config) is now available. See [docs/oli_whole_body.md](docs/oli_whole_body.md).
 
@@ -310,6 +314,22 @@ pip install --no-build-isolation -e .
 > **Note**: `requirements.txt` now composes `requirements-base.txt`,
 > `requirements-sim.txt`, and `requirements-real.txt`. It does not install
 > PyTorch; install CUDA PyTorch first or use `scripts/install_env.sh`.
+
+</details>
+
+<details>
+<summary><b>Jetson Orin Docker configuration</b></summary>
+
+For Jetson Orin setup, see [docs/orin_flashing.md](docs/orin_flashing.md) for initial flashing and JetPack setup, and [docs/orin_docker_runtime.md](docs/orin_docker_runtime.md) for the validated FluxVLA Docker runtime workflow.
+
+The validated Orin runtime is published as a Docker image:
+
+```bash
+docker pull fluxvla/fluxvla:fluxvla-orin-1.0.0
+scripts/run_docker.sh
+```
+
+`scripts/run_docker.sh` uses this image by default and mounts the current repository to `/workspace/FluxVLA`. Runtime details are documented in [docs/orin_docker_runtime.md](docs/orin_docker_runtime.md).
 
 </details>
 

@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from fluxvla.engines.utils.heterogeneous_runtime import \
+    import_heterogeneous_runtime_symbols
 from .eagle import EagleBackbone, EagleInferenceBackbone  # noqa: F401, F403
-from .florence2 import Florence2Backbone  # noqa: F401, F403
-from .paligemma import PaliGemma  # noqa: F401, F403
-from .qwen2_5_vl import QWen2_5VL  # noqa: F401, F403
-from .qwen3_vl import Qwen3VL  # noqa: F401, F403
-from .smolvlm import SmolVLMBackbone  # noqa: F401, F403
 
-try:
-    from .wan_backbone import WanBackbone  # noqa: F401
-except ImportError:
-    pass
+import_heterogeneous_runtime_symbols(
+    __name__,
+    globals(),
+    {
+        'florence2': ['Florence2Backbone'],
+        'paligemma': ['PaliGemma'],
+        'qwen2_5_vl': ['QWen2_5VL'],
+        'smolvlm': ['SmolVLMBackbone'],
+        'qwen3_vl': ['Qwen3VL'],
+        'wan_backbone': ['WanBackbone'],
+    },
+    runtime_missing_names=['transformers.models.qwen3_vl'],
+)

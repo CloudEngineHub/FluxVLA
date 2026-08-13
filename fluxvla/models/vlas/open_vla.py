@@ -12,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from torch.distributed.fsdp.wrap import _module_wrap_policy, _or_policy
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from fluxvla.engines import (VLAS, build_tokenizer_from_cfg,
                              initialize_overwatch)
 from fluxvla.engines.losses import reduce_action_bc_loss
+from fluxvla.engines.utils.fsdp_wrapping import (build_combined_wrap_policy,
+                                                 build_module_wrap_policy)
 from .base_vla import BaseVLA
 
 overwatch = initialize_overwatch(__name__)
@@ -504,19 +504,14 @@ class OpenVLA(BaseVLA):
 
         # Get Prismatic Wrapping Policy =>> just a module wrapping policy
         # around `self.projector`
-        projector_fsdp_wrapping_policy = partial(
-            _module_wrap_policy,
-            module_classes=set(PROJECTORS._module_dict.values()),
-        )
+        projector_fsdp_wrapping_policy = build_module_wrap_policy(
+            set(PROJECTORS._module_dict.values()))
         fsdp_policy_list.append(projector_fsdp_wrapping_policy)
         # Return union (_or_) over constituent policies
         # => Note: there is *not* a fall-through policy; any module that isn't
         # covered by the above constituents will automatically be folded into
         # the root VLM FSDP instance.
-        return partial(
-            _or_policy,
-            policies=fsdp_policy_list,
-        )
+        return build_combined_wrap_policy(fsdp_policy_list)
 
     @torch.no_grad()
     def generate(self,

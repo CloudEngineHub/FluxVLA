@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .llms import *  # noqa: F401, F403
-from .visions import *  # noqa: F401, F403
-from .vlms import *  # noqa: F401, F403
+from fluxvla.engines.utils.heterogeneous_runtime import \
+    import_heterogeneous_runtime_symbols
+
+import_heterogeneous_runtime_symbols(__name__, globals(), {
+    'llms': None,
+    'visions': None,
+    'vlms': None,
+})

@@ -14,11 +14,24 @@
 
 import argparse
 
-from mmengine import Config
+from mmengine import Config, DictAction
 
+import fluxvla.collators  # noqa: F401
+import fluxvla.datasets  # noqa: F401
+import fluxvla.engines.operators  # noqa: F401
+import fluxvla.tokenizers  # noqa: F401
+import fluxvla.transforms  # noqa: F401
 from fluxvla.engines import build_runner_from_cfg
 from fluxvla.engines.utils.torch_utils import \
     configure_inference_attention_defaults
+from fluxvla.models.backbones.vlms.eagle import EagleBackbone  # noqa: F401
+from fluxvla.models.backbones.vlms.eagle import \
+    EagleInferenceBackbone  # noqa: F401
+from fluxvla.models.heads.flow_matching_head import \
+    FlowMatchingHead  # noqa: F401
+from fluxvla.models.heads.flow_matching_inference_head import \
+    FlowMatchingInferenceHead  # noqa: F401
+from fluxvla.models.vlas.llava_vla import LlavaVLA  # noqa: F401
 
 
 def parse_args():
@@ -34,6 +47,11 @@ def parse_args():
         type=str,
         default=None,
         help='Path to the checkpoint file.')
+    parser.add_argument(
+        '--cfg-options',
+        nargs='+',
+        action=DictAction,
+        help='Override config settings as key=value pairs.')
     args = parser.parse_args()
     return args
 
@@ -47,6 +65,8 @@ if __name__ == '__main__':
     configure_inference_attention_defaults()
     args = parse_args()
     cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
     if args.ckpt_path is not None:
         cfg.inference.ckpt_path = args.ckpt_path
     cfg.inference.cfg = cfg

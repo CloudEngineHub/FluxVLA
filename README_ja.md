@@ -32,8 +32,8 @@ FluxVLA Engine は、具現知能（Embodied Intelligence）の実運用を見�
 | --------------------------- | :---------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------: | :------------: |
 | FluxVLA(SmolVLA)            |      [86.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/smolvla_libero_spatial_full_finetune_bs64)      |      [92.4](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/smolvla_libero_object_full_finetune_bs64)       |      [91.4](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/smolvla_libero_goal_full_finetune_bs64)       |      [68.8](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/smolvla_libero_10_full_finetune_bs64)       |      84.7      |
 | FluxVLA(GR00T)              |  [97.4](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_libero_spatial_full_finetune_bs64)   |   [96.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_libero_object_full_finetune_bs64)   |   [94.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_libero_goal_full_finetune_bs64)   | [93.0±1.5](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_libero_10_full_finetune_bs64) |      95.3      |
-| FluxVLA(Qwen3VL 0.6B+GR00T) | [96.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_object_full_finetune_bs64) | [99.4](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_object_full_finetune_bs64) | [95.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_goal_full_finetune_bs64) | [94.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_10_full_finetune_bs64) |     96.20      |
 | FluxVLA(DreamZero)          | [98.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/dreamzero_libero_spatial_full_finetune_w_cache_bs64) | [98.8](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/dreamzero_libero_object_full_finetune_w_cache_bs64)  | [93.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/dreamzero_libero_goal_full_finetune_w_cache_bs64)  | [94.8](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/dreamzero_libero_10_full_finetune_w_cache_bs64)  |     96.25      |
+| FluxVLA(Qwen3VL 0.6B+GR00T) | [96.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_object_full_finetune_bs64) | [99.4](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_object_full_finetune_bs64) | [95.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_goal_full_finetune_bs64) | [94.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_qwen3vl_0.6b_libero_10_full_finetune_bs64) |     96.20      |
 | FluxVLA(PI0)                |   [98.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_libero_spatial_full_finetune_bs64)   |   [98.8](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_libero_object_full_finetune_bs64)    |   [96.8](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_libero_goal_full_finetune_bs64)    |   [93.2](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_libero_10_full_finetune_bs64)    |     96.85      |
 | FluxVLA(PI0.5)              |  [98.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_spatial_full_finetune_bs64)   |   [99.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_object_full_finetune_bs64)   |   [98.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_goal_full_finetune_bs64)   | [95.6±1.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_10_full_finetune_bs64) |     97.95      |
 
@@ -55,7 +55,13 @@ FluxVLA Engine は、具現知能（Embodied Intelligence）の実運用を見�
 
 ## 📢 最新情報
 
-**\[2026/06/22\]** 🔥 Oli ヒューマノイドの全身（移動操作）実機推論の最小パス（operator + runner + サンプル設定）が利用可能になりました。詳細は [docs/oli_whole_body.md](docs/oli_whole_body.md) を参照してください。
+**\[2026/08/10\]** 🔥 FluxVLA は NVIDIA Jetson Orin へのデプロイに対応し、GR00T-N1.5 のエッジ高速推論で 7.4 Hz を達成しました。Orin の初期フラッシュ手順は [docs/orin_flashing.md](docs/orin_flashing.md)、FluxVLA Docker セットアップの起動手順は [docs/orin_docker_runtime.md](docs/orin_docker_runtime.md) を参照してください。
+
+**\[2026/06/30\]** 🔥 Franka の単腕・双腕実機推論をサポートしました。joint/eepose 制御設定とデプロイガイドを含みます。詳細は [docs/franka.md](docs/franka.md) を参照してください。
+
+**\[2026/06/25\]** 🔥 GR00T-RTC 高速化版をサポートしました。RTX 5090 デバイス上で 45 Hz を達成しています。
+
+**\[2026/06/22\]** 🔥 Oli ヒューマノイド全身（移動操作）向けの最小実機推論パス（operator、runner、サンプル設定）を追加しました。詳細は [docs/oli_whole_body.md](docs/oli_whole_body.md) を参照してください。
 
 **\[2026/06/17\]** 🔥 ARM 報酬モデリングと RA-BC/AW-BC 再重み付けをサポートしました。セットアップと使い方は [docs/arm.md](docs/arm.md) を参照してください。
 
@@ -81,42 +87,36 @@ FluxVLA Engine は、具現知能（Embodied Intelligence）の実運用を見�
 
 以下のいずれかのインストール方法を選択してください：
 
-- **推奨：一括インストールスクリプト**：通常の学習、シミュレーション評価、実機推論環境に使用します。
-- **既存の FluxVLA 環境を更新する**：以前の FluxVLA をインストール済みで、変更された package だけ更新したい場合に使用します。
-- **最初から手動でインストールする**：各 package のインストール手順を自分で制御したい場合のみ使用します。
+- **推奨：ワンコマンドインストーラ**：通常の学習、シミュレーション評価、実機推論環境に適しています。
+- **既存の FluxVLA 環境を更新**：以前の FluxVLA 環境があり、変更された依存関係だけを更新したい場合に使います。
+- **ゼロから手動インストール**：各パッケージのインストール手順を完全に制御したい場合のみ使います。
 
-### 推奨：一括インストールスクリプト
+### 推奨：ワンコマンドインストーラ
 
 ```bash
 conda create -n fluxvla python=3.10 -y
 conda activate fluxvla
 
-# いずれかを選択: sim-only, real-only, full
+# モードを 1 つ選択：sim-only、real-only、または full。
 bash scripts/install_env.sh sim-only
 # bash scripts/install_env.sh real-only
 # bash scripts/install_env.sh full
 ```
 
 <details>
-<summary><b>インストーラで問題が出る場合：mode と CUDA profile を確認する</b></summary>
+<summary><b>インストーラで問題がある場合：モードと CUDA profile の選択を確認</b></summary>
 
-`sim-only` はシミュレーション / LIBERO / RoboCasa 関連依存関係に加えて、固定バージョンの RoboCasa source checkout を `./src` にインストールします。`real-only` は実機とリモート推論の依存関係を、`full` は両方をインストールします。RoboCasa checkout が不要な場合は `--skip-robocasa` を使ってください。
-インストーラが RoboCasa source checkout をインストールする場合
-（`sim-only`、`full`、または `real-only --with-robocasa`）、RoboCasa
-simulator assets もデフォルトでダウンロードします。インストーラは
-`scripts/download_robocasa_assets.py` を呼び出し、
-`FLUXVLA_ROBOCASA_ASSET_ENDPOINT`（デフォルトは `HF_ENDPOINT`、次に
-`https://hf-mirror.com`）を使用します。asset だけをスキップするには
-`--skip-robocasa-assets`、source checkout と asset の両方をスキップするには
-`--skip-robocasa` を使ってください。
+`sim-only` はシミュレーション / LIBERO / RoboCasa ランタイム依存関係と、固定された RoboCasa ソース checkout を `./src` 配下にインストールします。`real-only` は実機とリモート推論の依存関係をインストールし、`full` は両方をインストールします。RoboCasa checkout が不要な場合は `--skip-robocasa` を指定してください。
 
-スクリプトは CUDA PyTorch profile を自動選択し、まず現在の CUDA toolkit / `nvcc` version を優先します。CUDA >= 12.8 では `cu128`、それ以外では `cu124` を選択します。toolkit が見つからない場合は driver-reported CUDA、最後に GPU generation を fallback として使います。`--profile cu128` または `--profile cu124` で明示指定できます。
+インストーラが RoboCasa ソース checkout をインストールする場合（`sim-only`、`full`、または `real-only --with-robocasa`）、RoboCasa シミュレーションアセットもデフォルトでダウンロードします。内部では `scripts/download_robocasa_assets.py` を呼び出し、`FLUXVLA_ROBOCASA_ASSET_ENDPOINT`（デフォルトは `HF_ENDPOINT`、次に `https://hf-mirror.com`）を使用します。アセットだけをスキップする場合は `--skip-robocasa-assets`、ソース checkout とアセットの両方をスキップする場合は `--skip-robocasa` を使ってください。
 
-PyTorch のインストール後、実際の Python tag、PyTorch バージョン、CUDA major version、C++ ABI、CPU architecture から FlashAttention wheel を自動選択します。対応する prebuilt wheel がない場合は `FLASH_ATTN_WHEEL_URL` を明示するか、`--skip-flash-attn` を使ってください。
+インストーラはまず現在の CUDA toolkit / `nvcc` バージョンから PyTorch CUDA profile を自動選択します。CUDA >= 12.8 なら `cu128`、それ以外は `cu124` を選びます。toolkit が見つからない場合は、ドライバが報告する CUDA バージョンと GPU 世代にフォールバックします。`--profile cu128` または `--profile cu124` で明示的に上書きできます。
 
-`av` は conda の依存解決が遅くなるのを避けるため、デフォルトではまず pip wheel からインストールされます。wheel がない場合は conda にフォールバックします。conda-forge 版が必要な場合は `FLUXVLA_AV_INSTALLER=conda` を指定してください。
+PyTorch のインストール後、FlashAttention wheel は実際の Python tag、PyTorch バージョン、CUDA メジャーバージョン、C++ ABI、CPU アーキテクチャに基づいて選択されます。対象プラットフォームに合う事前ビルド wheel がない場合は、`FLASH_ATTN_WHEEL_URL` を明示的に指定するか、`--skip-flash-attn` を指定してください。
 
-実機 runner にはシステム側の ROS も必要です。ROS Noetic の環境では、推論を起動する前に ROS を source してください：
+`av` は、conda の依存解決が遅くなるのを避けるため、デフォルトでまず pip wheel からインストールされます。利用可能な wheel がない場合は conda にフォールバックします。conda-forge パッケージを明示的に使いたい場合は `FLUXVLA_AV_INSTALLER=conda` を設定してください。
+
+実機 runner では、システム側の ROS インストール自体は引き続き必要です。ROS Noetic マシンでは、推論を起動する前に ROS を source してください：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -125,9 +125,9 @@ source /opt/ros/noetic/setup.bash
 </details>
 
 <details>
-<summary><b>インストーラで問題が出る場合：キャッシュ済みまたは mirror 上の FlashAttention wheel を使う</b></summary>
+<summary><b>インストーラで問題がある場合：キャッシュ済みまたはミラー済みの FlashAttention wheel を使う</b></summary>
 
-FlashAttention wheel は大きいため、ネットワークが遅い環境では GitHub release のダウンロードが初回インストール時間の大部分を占めることがあります。繰り返しインストールする場合は、正確に一致する wheel ファイルを `./wheelhouse/`、`./wheels/`、または `~/.cache/fluxvla/wheels/` に置いてください。インストーラはネットワークへアクセスする前にそれを使用します。ローカルファイルや内部 mirror を明示することもできます：
+FlashAttention wheel は大きいため、遅いネットワークでは GitHub release のダウンロードが時間の大半を占めることがあります。繰り返しインストールする場合は、正確に一致する wheel ファイルを `./wheelhouse/`、`./wheels/`、または `~/.cache/fluxvla/wheels/` に置くと、インストーラがオンライン取得より先に使用します。ローカルファイルや社内ミラーを指定することもできます：
 
 ```bash
 FLASH_ATTN_WHEEL_FILE=/path/to/flash_attn-2.8.3.post1+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl \
@@ -140,9 +140,9 @@ bash scripts/install_env.sh sim-only --profile cu128
 </details>
 
 <details>
-<summary><b>インストーラで問題が出る場合：pip mirror と timeout を指定する</b></summary>
+<summary><b>インストーラで問題がある場合：pip ミラーとタイムアウトをカスタマイズ</b></summary>
 
-インストーラは既存の pip 設定を優先します。その index に package がない場合、または pip index が設定されていない場合は、PyPI と複数の一般的な mirror を probe し、このマシンでの応答速度順に再試行します。ネットワークが遅い、または不安定な場合は候補 mirror と timeout を明示できます：
+インストーラは、まず既存の pip 設定を尊重します。そのインデックスにパッケージがない場合、または pip インデックスが設定されていない場合は、PyPI と複数の一般的なミラーを探査し、応答状況に応じて再試行します。遅い／不安定なネットワークでは、候補インデックスとタイムアウトをカスタマイズできます：
 
 ```bash
 PIP_INDEX_CANDIDATES="https://mirrors.aliyun.com/pypi/simple https://mirrors.cloud.tencent.com/pypi/simple https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple" \
@@ -154,15 +154,15 @@ bash scripts/install_env.sh full
 
 </details>
 
-### 既存の FluxVLA 環境を更新する
+### 既存の FluxVLA 環境を更新
 
-FluxVLA(v0.1.0) をすでに clone / install している場合、conda 環境を作り直す必要はありません。最新コードを pull し、現在の simulation / model stack で実際に変わった package だけ更新してください：
+FluxVLA(v0.1.0) をすでに clone / install 済みの場合、conda 環境を作り直す必要はありません。最新コードを取得し、現在のシミュレーション / モデルスタックで変更されたパッケージだけを更新します：
 
 ```bash
 bash scripts/update_env.sh
 ```
 
-すでに checkout を更新済みの場合は `--skip-pull`、FluxVLA を editable mode で再インストールしない場合は `--skip-project` を指定してください。
+すでに checkout を更新済みの場合は `--skip-pull`、FluxVLA を editable mode で再インストールしたくない場合は `--skip-project` を指定してください。
 
 <details>
 <summary><b>等価な手動コマンド</b></summary>
@@ -179,9 +179,9 @@ python -c "import transformers; print(transformers.__version__)"
 
 </details>
 
-RoboCasa GR00T support は引き続き optional です。現在のインストーラは `sim-only` と `full` で `./src` 配下の Isaac-GR00T と RoboCasa GR1 local checkout を自動管理します。RoboCasa configs を使わない場合は `--skip-robocasa` を指定してください。
+RoboCasa GR00T サポートは引き続き任意です。インストーラは `sim-only` と `full` で、`./src` 配下の Isaac-GR00T と RoboCasa GR1 ローカル checkout を管理します。RoboCasa 設定を使わない場合は `--skip-robocasa` を指定してください。
 
-更新スクリプトは PyTorch や FlashAttention を再インストールしません。既存の `flash-attn==2.5.5` は、現在の PyTorch/CUDA build に対してまだ import できる場合のみ使い続けてください：
+更新ヘルパーは PyTorch や FlashAttention を再インストールしません。既存の `flash-attn==2.5.5` 環境は、現在インストールされている PyTorch/CUDA build に対してまだ import できる場合のみ、そのまま使うことを推奨します：
 
 ```bash
 python - <<'PY'
@@ -192,11 +192,11 @@ print("flash-attn", flash_attn.__version__)
 PY
 ```
 
-現在のインストーラや以下の手順で PyTorch を更新する場合は、対応する FlashAttention wheel も再インストールしてください。現在のインストーラはデフォルトで `flash-attn==2.8.3.post1` を使います。
+現在のインストーラや下記の手動コマンドで PyTorch をアップグレードした場合は、対応する FlashAttention wheel も再インストールしてください。インストーラは現在、サポートされる PyTorch profile に対して `flash-attn==2.8.3.post1` をデフォルトで使用します。
 
-### 最初から手動でインストールする
+### ゼロから手動インストール
 
-`scripts/install_env.sh` を使わない場合のみ手動インストールを選択してください。先に PyTorch、次に FlashAttention、最後に FluxVLA の残りの依存関係をインストールします。
+手動パスは `scripts/install_env.sh` を使わない場合のみ利用してください。まず PyTorch、次に FlashAttention、最後に FluxVLA の残りの依存関係をインストールします。
 
 <details>
 <summary><b>1. conda 環境を作成する</b></summary>
@@ -225,8 +225,7 @@ pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https
 <details>
 <summary><b>3. flash-attention をインストールする</b></summary>
 
-一括インストールスクリプトは公式 release assets から prebuilt
-FlashAttention wheel をダウンロードします。手動で入れる場合も、ソースビルドではなく Python、PyTorch、C++ ABI に合う wheel を指定してください：
+ワンコマンドインストーラは、公式 release assets から事前ビルド済み FlashAttention wheel をダウンロードします。手動インストールでは、ソースからビルドするのではなく、Python、PyTorch、C++ ABI に一致する wheel をインストールしてください：
 
 ```bash
 PYTAG=$(python - <<'PY'
@@ -244,9 +243,9 @@ pip install --no-deps \
   "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.8cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
 ```
 
-PyTorch 2.6 を使う場合は、URL 内の `torch2.8` を `torch2.6` に置き換えてください。
+PyTorch 2.6 をインストールしている場合は、wheel URL 内の `torch2.8` を `torch2.6` に置き換えてください。
 
-FlashAttention wheel は Python、PyTorch、CUDA、C++ ABI に強く依存します。`flash-attn==2.5.5` 自体は禁止ではありませんが、現在使っている PyTorch/CUDA stack 向けに build されていて、上の import check が通る場合のみ保持してください。PyTorch を更新した後は、対応する FlashAttention wheel を再インストールしてください。
+FlashAttention wheel は、インストール済みの Python、PyTorch、CUDA、C++ ABI に強く依存します。`flash-attn==2.5.5` は禁止ではありませんが、現在の PyTorch/CUDA スタック向けに正確にビルドされている場合のみ安全です。PyTorch をアップグレードした後は、必ず対応する FlashAttention wheel を再インストールしてください。
 
 </details>
 
@@ -267,22 +266,38 @@ pip install -r requirements.txt
 pip install --no-build-isolation -e .
 ```
 
-> **補足**：`requirements.txt` は `requirements-base.txt`、`requirements-sim.txt`、`requirements-real.txt` をまとめるファイルになりました。PyTorch はインストールしないため、先に CUDA 版 PyTorch を入れるか、`scripts/install_env.sh` を使用してください。
+> **補足**：現在の `requirements.txt` は `requirements-base.txt`、`requirements-sim.txt`、`requirements-real.txt` を組み合わせる構成で、PyTorch はインストールしません。先に CUDA PyTorch をインストールするか、`scripts/install_env.sh` を使ってください。
 
 </details>
 
 <details>
-<summary><b>任意：RoboCasa GR00T source checkout</b></summary>
+<summary><b>Jetson Orin Docker 設定</b></summary>
 
-RoboCasa GR00T 設定（例：`configs/gr00t/gr00t_eagle_3b_robocasa_finetune.py`）には、固定バージョンの Isaac-GR00T と RoboCasa GR1 task checkout が必要です。one-click installer は `sim-only` と `full` でこれらをデフォルトでインストールし、`./src` 配下に配置します：
+Jetson Orin の初期フラッシュと JetPack セットアップは [docs/orin_flashing.md](docs/orin_flashing.md)、検証済みの FluxVLA Docker ランタイム手順は [docs/orin_docker_runtime.md](docs/orin_docker_runtime.md) を参照してください。
+
+検証済みの Orin ランタイムは Docker イメージとして公開されています：
+
+```bash
+docker pull fluxvla/fluxvla:fluxvla-orin-1.0.0
+scripts/run_docker.sh
+```
+
+`scripts/run_docker.sh` はこのイメージをデフォルトで使用し、現在のリポジトリをコンテナ内の `/workspace/FluxVLA` にマウントします。詳細は [docs/orin_docker_runtime.md](docs/orin_docker_runtime.md) を参照してください。
+
+</details>
+
+<details>
+<summary><b>RoboCasa GR00T ソース checkout（任意）</b></summary>
+
+RoboCasa GR00T 設定（例：`configs/gr00t/gr00t_eagle_3b_robocasa_finetune.py`）では、固定された Isaac-GR00T と RoboCasa GR1 task checkout が必要です。ワンクリックインストーラは `sim-only` と `full` でこれらをデフォルト処理し、`./src` に配置します：
 
 ```bash
 bash scripts/install_env.sh sim-only
 ```
 
-checkout root を変更するには `FLUXVLA_ROBOCASA_SRC_ROOT=/path/to/src` を使います。source install をスキップするには `--skip-robocasa`、`real-only` mode でも強制するには `--with-robocasa` を使ってください。runtime dependencies と patch 済み robosuite は `requirements-sim.txt` からインストールされます。
+`FLUXVLA_ROBOCASA_SRC_ROOT=/path/to/src` で別の checkout root を指定できます。これらのソースインストールをスキップする場合は `--skip-robocasa`、`real-only` モードで強制的に含める場合は `--with-robocasa` を使ってください。ランタイム依存関係とパッチ済み robosuite build は `requirements-sim.txt` からインストールされます。
 
-インストーラを使わない場合の同等の手順は次のとおりです：
+インストーラを使わない場合、等価な手動コマンドは次の通りです：
 
 ```bash
 pip install "mujoco==3.2.6" gymnasium lxml
@@ -303,11 +318,11 @@ editable インストールでは `--no-deps` を推奨します。RoboCasa 関�
 </details>
 
 <details>
-<summary><b>任意：LIBERO / MuJoCo EGL オンライン評価設定</b></summary>
+<summary><b>オンライン評価環境（LIBERO / EGL）</b></summary>
 
 レイトレーシング非対応のデバイス（例：A100）で LIBERO を評価したい場合は、[EGL Device GPU Rendering Configuration](https://github.com/google-deepmind/mujoco/issues/572#issuecomment-2419965230) を参照してください。
 
-`scripts/install_env.sh sim-only` と `scripts/install_env.sh full` は MuJoCo EGL を自動で確認します。EGL デバイスが見えない場合、インストーラは以下のシステムパッケージのインストール、NVIDIA GLVND vendor ファイルの作成、`MUJOCO_GL=egl` 用の conda activation hook の作成を試みます。厳密に失敗させたい場合は `FLUXVLA_EGL_SETUP=always`、スキップする場合は `--skip-egl-setup` を使ってください。
+`scripts/install_env.sh sim-only` と `scripts/install_env.sh full` は、MuJoCo EGL を自動的に探査します。EGL デバイスが見えない場合、インストーラは以下のシステムパッケージをインストールし、NVIDIA GLVND vendor ファイルを作成し、`MUJOCO_GL=egl` の conda activation hook を書き込みます。このチェックを厳格にしたい場合は `FLUXVLA_EGL_SETUP=always`、スキップしたい場合は `--skip-egl-setup` を使ってください。
 
 **システム依存関係のインストール**
 
@@ -340,7 +355,7 @@ sudo apt-get install -y libegl1 libglvnd0 libopengl0 libegl-dev libgl1-mesa-dev 
 }
 ```
 
-その後、環境がすでに設定していない場合は `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json` を付けて eval を起動してください。
+環境がすでにこの変数を export していない場合は、評価起動時に `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json` を設定してください。
 
 </details>
 
@@ -485,40 +500,27 @@ ARM の学習は、このデータセットの `progress` 列を直接読み取�
 <details>
 <summary><b>アセットの準備</b></summary>
 
-RoboCasa GR1 tabletop タスクでは、以下の FluxVLA asset downloader を
-サポートされる手順として使用してください。表はスクリプトが使用する
-upstream archive の一覧です。これらの archive を手動でダウンロードして
-展開するだけでは不十分です。このスクリプトは directory layout の修正と、
-固定された RoboCasa GR1 checkout 向けの Objaverse XML metadata の正規化も
-行います。
+RoboCasa GR1 tabletop tasks では、以下の FluxVLA アセットダウンローダーをサポートされた手順として使用してください。表にはスクリプトが利用する上流アーカイブを示しています。これらを手動でダウンロードして展開するだけでは不十分です。スクリプトはディレクトリ構成の修正と、固定された RoboCasa GR1 checkout 向けの Objaverse XML メタデータ正規化も行います。
 
-| アセット archive                                           | ダウンロードリンク                                                                                               | ローカルディレクトリ                                       |
+| アセットアーカイブ                                         | ダウンロードリンク                                                                                               | ローカルディレクトリ                                       |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `objaverse.zip`, `textures.zip`, `generative_textures.zip` | [robocasa/robocasa-assets](https://huggingface.co/datasets/robocasa/robocasa-assets)                             | `./src/robocasa-gr1-tabletop-tasks/robocasa/models/assets` |
 | `fixtures.zip`                                             | [jianzhang96/robocasa-assets](https://huggingface.co/datasets/jianzhang96/robocasa-assets)                       | `./src/robocasa-gr1-tabletop-tasks/robocasa/models/assets` |
 | `sketchfab.zip`, `lightwheel.zip`                          | [nvidia/PhysicalAI-DigitalCousin-Assets](https://huggingface.co/datasets/nvidia/PhysicalAI-DigitalCousin-Assets) | `./src/robocasa-gr1-tabletop-tasks/robocasa/models/assets` |
 
-`scripts/install_env.sh` を使う場合、この downloader は RoboCasa source
-checkout と一緒にデフォルトで実行されます。ただし `--skip-robocasa` または
-`--skip-robocasa-assets` を指定した場合は実行されません。手動インストールや
-asset の再取得では、FluxVLA repository root から以下を実行してください。
-指定した Hugging Face endpoint 経由で必要な archive をダウンロードし、
-RoboCasa の asset directory に展開し、Objaverse XML metadata を正規化します:
+`scripts/install_env.sh` を使う場合、このダウンローダーは `--skip-robocasa` または `--skip-robocasa-assets` が指定されない限り、RoboCasa ソース checkout と一緒にデフォルトで実行されます。手動インストールやアセット更新では、FluxVLA リポジトリのルートから次のコマンドを実行してください。指定した Hugging Face endpoint 経由で必要なアーカイブをダウンロードし、RoboCasa アセットディレクトリに展開し、Objaverse XML メタデータを正規化します：
 
 ```bash
 python scripts/download_robocasa_assets.py --endpoint https://hf-mirror.com
 ```
 
-archive または展開済み asset がすでにローカルにある場合でも、XML 互換処理
-を適用するため、このスクリプトは実行してください。asset がすでに
-`./src/robocasa-gr1-tabletop-tasks/robocasa/models/assets` に展開済みの場合は、
-validation と XML 正規化だけを実行できます:
+アーカイブや展開済みアセットがすでにローカルに存在する場合でも、XML 互換性処理を適用するためにこのスクリプトを実行してください。アセットがすでに `./src/robocasa-gr1-tabletop-tasks/robocasa/models/assets` に展開済みの場合は、検証と XML 正規化だけを実行できます：
 
 ```bash
 python scripts/download_robocasa_assets.py --normalize-only
 ```
 
-シンボリックリンクは必須ではなく、アセットが別のローカルディスクや共有ストレージに既に存在する場合の利便性のための手段にすぎません。
+シンボリックリンクは必須ではありません。アセットが別のローカルディスクや共有ストレージにすでに存在する場合の便宜的な手段です。
 
 </details>
 
@@ -619,6 +621,7 @@ ARM と SARM のワークフローでは、通常は学習 / 推論用の CLIP �
 | PI05_base                 | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                                       |
 | PI05_libero               | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                                     |
 | PI05 RoboCasa（全データ） | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_21aa5e82a_bs256) |
+| SmolVLA                   | 450M   | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                                 |
 
 config が期待するディレクトリ構成を維持したまま PI0.5 RoboCasa full-data checkpoint をダウンロードします：
 
@@ -633,10 +636,11 @@ hf download limxdynamics/FluxVLAEngine \
 <details>
 <summary><b>視覚言語モデル（VLM）</b></summary>
 
-| モデル     | サイズ | ダウンロードリンク                                                       |
-| ---------- | ------ | ------------------------------------------------------------------------ |
-| Qwen2.5-VL | 3B     | [🤗 Hugging Face](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct)    |
-| Qwen3-VL   | 30B    | [🤗 Hugging Face](https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct) |
+| モデル     | サイズ | ダウンロードリンク                                                                   |
+| ---------- | ------ | ------------------------------------------------------------------------------------ |
+| Qwen2.5-VL | 3B     | [🤗 Hugging Face](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct)                |
+| Qwen3-VL   | 30B    | [🤗 Hugging Face](https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct)             |
+| SmolVLM2   | 500M   | [🤗 Hugging Face](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct) |
 
 </details>
 
@@ -732,7 +736,7 @@ VLM ベースの自動アノテーションを使う場合は、公式 SARM VLM 
 - ZMQ ベースのリモート推論インフラをサポートします。サーバー/クライアントアーキテクチャにより、モデル推論を GPU サーバーにオフロードし、リソースが限られたエッジデバイスへのデプロイを可能にします。詳細は [リモート推論サービス](docs/remote_inference_serving.md) を参照してください。
 - [RTC（Real-Time Chunking）](docs/rtc.md) をサポートし、チャンク間の軌跡の連続性を向上させます。
 - GR00T と PI0.5 の推論を高速化します。詳細は [Inference Acceleration](docs/inference_acceleration.md) を参照してください。Triton の融合カーネル、CUDA Graph のキャプチャ、CUDA のカスタム演算子が含まれます。
-- Oli ヒューマノイドの全身（移動操作）実機推論の最小パスを提供（rospy センサ入力 + WebSocket 制御出力；base/ハンド指令はロボット SDK の統合ポイント）。詳細は [docs/oli_whole_body.md](docs/oli_whole_body.md) を参照。
+- Oli ヒューマノイド全身（移動操作）向けの最小実機推論パスを提供します（rospy センサー入力 + WebSocket 制御。ベース / ハンドコマンドはロボット SDK 統合ポイントです）。詳細は [docs/oli_whole_body.md](docs/oli_whole_body.md) を参照してください。
 
 </details>
 
@@ -794,14 +798,18 @@ RoboCasa GR00T の評価の例：
 
 ```bash
 MUJOCO_GL=egl WANDB_MODE=disabled TOKENIZERS_PARALLELISM=false \
+PYTHONHASHSEED=7 \
 torchrun --standalone --nnodes 1 --nproc-per-node 1 scripts/eval.py \
   --config configs/gr00t/gr00t_eagle_3b_robocasa_finetune.py \
   --ckpt-path work_dirs/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64/checkpoints/step-010000.safetensors \
   --cfg-options \
     eval.norm_stats_path=work_dirs/official_groot_gr1_dataset_statistics.json \
     eval.output_dir=work_dirs/gr00t_eagle_3b_robocasa_eval \
-    eval.num_trials_per_task=20
+    eval.num_trials_per_task=50 \
+    eval.seed=7
 ```
+
+`eval.seed` は RoboCasa の episode seeds と、評価中の確率的な GR00T action sampling seeds を制御します。`PYTHONHASHSEED` は独立しており、Python 起動前に設定する必要があります。報告済みの RoboCasa 結果を再現する場合は、同じ値を使うことを推奨します。
 
 </details>
 
