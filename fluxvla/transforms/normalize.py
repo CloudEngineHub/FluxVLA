@@ -309,9 +309,18 @@ class DenormalizePrivateAction(DenormalizeLiberoAction):
         """
         if self.norm_stats is not None and self.denorm_action:
             norm_stats = self.norm_stats[self.statistic_name]
-            action = data.get('action', None)[0]
+            action = data.get('action', None)
             assert action is not None, \
                 f'Action is not found in the data: {data.keys()}'
+            action = np.asarray(action)
+            if action.ndim == 3:
+                if action.shape[0] != 1:
+                    raise ValueError(
+                        'Only batch size one is supported for action '
+                        f'denormalization, got {action.shape}.')
+                action = action[0]
+            elif action.ndim == 2 and action.shape[0] == 1:
+                action = action[0]
             stats = norm_stats['action']
             cont = self._denormalize_by_type(action, stats, self.norm_type,
                                              self.action_norm_mask)
@@ -349,6 +358,44 @@ class DenormalizePrivateAction(DenormalizeLiberoAction):
 
 
 @TRANSFORMS.register_module()
+class DenormalizeDeltaAction(DenormalizePrivateAction):
+    """Denormalize selected state-relative dimensions to absolute commands.
+
+    Quantile/mean-std denormalization is applied first.  Dimensions selected
+    by ``delta_action_mask`` are then offset by the current raw robot state;
+    unselected dimensions, such as grippers, remain absolute.
+    """
+
+    def __init__(self, delta_action_mask: List[bool], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.delta_action_mask = np.asarray(delta_action_mask, dtype=bool)
+        if self.delta_action_mask.ndim != 1:
+            raise ValueError('delta_action_mask must be one-dimensional')
+
+    def __call__(self, data: Dict) -> np.ndarray:
+        action = np.asarray(super().__call__(data), dtype=np.float32)
+        state = data.get('state')
+        if state is None:
+            raise ValueError(
+                'Current raw robot state is required to restore delta '
+                'actions.')
+        state = np.asarray(state, dtype=np.float32)
+        if state.ndim == 2 and state.shape[0] == 1:
+            state = state[0]
+        if state.ndim != 1:
+            raise ValueError(
+                f'Current robot state must have shape [D], got {state.shape}.')
+        dims = len(self.delta_action_mask)
+        if action.shape[-1] < dims or state.shape[-1] < dims:
+            raise ValueError(
+                f'Delta mask length {dims} exceeds action/state dimensions '
+                f'{action.shape[-1]}/{state.shape[-1]}.')
+        action[..., :dims] += np.where(self.delta_action_mask, state[:dims],
+                                       0.0)
+        return action
+
+
+@TRANSFORMS.register_module()
 class NormalizeStatesAndActions:
     """Normalize states and actions in the data.
     This transform normalizes the state and action
@@ -372,6 +419,9 @@ class NormalizeStatesAndActions:
             to [-1, 1]. Defaults to False.
         normalize_states (bool): Whether to normalize states before optional
             padding/truncation. Defaults to True.
+        output_dtype (str | None): Optional NumPy dtype used for normalization
+            arithmetic and outputs. ``None`` preserves the legacy NumPy dtype
+            promotion behavior. Defaults to None.
         state_key (str | None): The key in the data dictionary
             that contains the state information.
         action_key (str | None): The key in the data dictionary
@@ -397,6 +447,7 @@ class NormalizeStatesAndActions:
                  pad_invalid_action_delta_dims: bool = False,
                  delta_action_dim_mask: List[bool] = None,
                  action_pad_mask_key: str = 'action_masks',
+                 output_dtype: Optional[str] = None,
                  *args,
                  **kwargs):
         self.state_key = state_key
@@ -410,6 +461,12 @@ class NormalizeStatesAndActions:
         self.clip_norm = clip_norm
         self.normalization_epsilon = float(normalization_epsilon)
         self.normalize_states = normalize_states
+        self.output_dtype = (None if output_dtype is None else
+                             np.dtype(output_dtype))
+        if (self.output_dtype is not None
+                and not np.issubdtype(self.output_dtype, np.floating)):
+            raise ValueError(
+                f'output_dtype must be a floating dtype, got {output_dtype!r}')
         if action_norm_mask is not None:
             assert len(action_norm_mask) == action_dim, \
                 f'Action norm mask must be of length {action_dim}'
@@ -452,6 +509,8 @@ class NormalizeStatesAndActions:
                 state_stats,
                 self.state_norm_type,
                 discrete_dims=self.discrete_state_dims)
+        if self.output_dtype is not None:
+            states = np.asarray(states, dtype=self.output_dtype)
         data['states'] = states
 
         if actions is not None:
@@ -463,6 +522,8 @@ class NormalizeStatesAndActions:
                     self.action_norm_type,
                     discrete_dims=self.discrete_action_dims,
                     base_mask=self.action_norm_mask)
+            if self.output_dtype is not None:
+                actions = np.asarray(actions, dtype=self.output_dtype)
             data['actions'] = actions
         if self.state_dim is not None:
             data['states'] = self._pad_or_truncate_last_dim(
@@ -536,6 +597,8 @@ class NormalizeStatesAndActions:
                            stats: Dict,
                            norm_type: str,
                            norm_mask: List[bool] = None):
+        if self.output_dtype is not None:
+            x = np.asarray(x, dtype=self.output_dtype)
         if norm_type == 'none':
             return x
         if norm_type == 'quantile':
@@ -547,9 +610,14 @@ class NormalizeStatesAndActions:
     def _normalize(self, x, stats: Dict, norm_mask: List[bool] = None):
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        return np.where(norm_mask, (x - np.array(stats['mean'])) /
-                        (np.array(stats['std']) + self.normalization_epsilon),
-                        x)
+        dtype = self.output_dtype
+        mean = np.asarray(stats['mean'], dtype=dtype)
+        std = np.asarray(stats['std'], dtype=dtype)
+        epsilon = (
+            self.normalization_epsilon if dtype is None else np.asarray(
+                self.normalization_epsilon, dtype=dtype))
+        normalized = (x - mean) / (std + epsilon)
+        return np.where(norm_mask, normalized, x)
 
     def _normalize_quantile(self,
                             x,
@@ -559,9 +627,13 @@ class NormalizeStatesAndActions:
         assert stats['q99'] is not None
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        normalized = ((x - np.array(stats['q01'])) /
-                      (np.array(stats['q99']) - np.array(stats['q01']) +
-                       self.normalization_epsilon) * 2.0 - 1.0)
+        dtype = self.output_dtype
+        low = np.asarray(stats['q01'], dtype=dtype)
+        high = np.asarray(stats['q99'], dtype=dtype)
+        epsilon = (
+            self.normalization_epsilon if dtype is None else np.asarray(
+                self.normalization_epsilon, dtype=dtype))
+        normalized = (x - low) / (high - low + epsilon) * 2.0 - 1.0
         if self.clip_norm:
             normalized = np.clip(normalized, -1, 1)
         return np.where(norm_mask, normalized, x)
@@ -571,9 +643,13 @@ class NormalizeStatesAndActions:
         assert 'max' in stats and stats['max'] is not None
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        normalized = ((x - np.array(stats['min'])) /
-                      (np.array(stats['max']) - np.array(stats['min']) +
-                       self.normalization_epsilon) * 2.0 - 1.0)
+        dtype = self.output_dtype
+        low = np.asarray(stats['min'], dtype=dtype)
+        high = np.asarray(stats['max'], dtype=dtype)
+        epsilon = (
+            self.normalization_epsilon if dtype is None else np.asarray(
+                self.normalization_epsilon, dtype=dtype))
+        normalized = (x - low) / (high - low + epsilon) * 2.0 - 1.0
         if self.clip_norm:
             normalized = np.clip(normalized, -1, 1)
         return np.where(norm_mask, normalized, x)

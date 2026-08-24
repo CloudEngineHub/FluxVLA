@@ -46,7 +46,8 @@ class AlohaOperator:
                  use_depth_image=False,
                  use_robot_base=False,
                  arm_steps_length=None,
-                 publish_rate=30):
+                 publish_rate=30,
+                 image_encoding='passthrough'):
         """Initialize AlohaOperator with ROS topics configuration.
 
         Args:
@@ -93,6 +94,10 @@ class AlohaOperator:
             arm_steps_length = [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
         self.arm_steps_length = arm_steps_length
         self.publish_rate = publish_rate
+        if image_encoding not in ('rgb8', 'bgr8', 'passthrough'):
+            raise ValueError('image_encoding must be rgb8, bgr8, or '
+                             'passthrough')
+        self.image_encoding = image_encoding
 
         # Initialize components
         self._init()
@@ -245,17 +250,17 @@ class AlohaOperator:
         while self.img_left_deque[0].header.stamp.to_sec() < frame_time:
             self.img_left_deque.popleft()
         img_left = self.bridge.imgmsg_to_cv2(self.img_left_deque.popleft(),
-                                             'passthrough')
+                                             self.image_encoding)
 
         while self.img_right_deque[0].header.stamp.to_sec() < frame_time:
             self.img_right_deque.popleft()
         img_right = self.bridge.imgmsg_to_cv2(self.img_right_deque.popleft(),
-                                              'passthrough')
+                                              self.image_encoding)
 
         while self.img_front_deque[0].header.stamp.to_sec() < frame_time:
             self.img_front_deque.popleft()
         img_front = self.bridge.imgmsg_to_cv2(self.img_front_deque.popleft(),
-                                              'passthrough')
+                                              self.image_encoding)
 
         # Synchronize and extract arm data
         while (self.puppet_arm_left_deque[0].header.stamp.to_sec() <

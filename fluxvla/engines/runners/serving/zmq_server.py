@@ -68,7 +68,7 @@ class PolicyServer:
         self.running = True
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
-        self.socket.bind(f'tcp://{host}:{port}')
+        self.socket.bind('tcp://{}:{}'.format(host, port))
         self._endpoints: dict[str, EndpointHandler] = {}
 
         self.register_endpoint('ping', self._handle_ping, requires_input=False)
@@ -221,18 +221,32 @@ def create_server(
 
         obs = _obs_dict if _obs_dict is not None else \
             ObsSerializer.from_bytes(obs_data)
+        denormalize_context = {}
+        if isinstance(obs, dict) and obs.get('qpos') is not None:
+            denormalize_context['state'] = np.asarray(
+                obs['qpos'], dtype=np.float32).copy()
 
         if dataset is not None:
             result = dataset(obs)
             batch = result[0] if isinstance(result, tuple) else result
+            if 'state' not in denormalize_context:
+                raw_state = getattr(dataset, 'last_raw_state', None)
+                if raw_state is not None:
+                    denormalize_context['state'] = np.asarray(
+                        raw_state, dtype=np.float32).copy()
         else:
             batch = obs
         if unnorm_key:
             batch['unnorm_key'] = unnorm_key
 
         t0 = time.perf_counter()
+        autocast_enabled = (
+            torch_device.type == 'cuda'
+            and mixed_precision_dtype in {torch.bfloat16, torch.float16})
         with torch.no_grad(), torch.autocast(
-                'cuda', dtype=mixed_precision_dtype, enabled=True):
+                torch_device.type,
+                dtype=mixed_precision_dtype,
+                enabled=autocast_enabled):
             for k, v in batch.items():
                 if isinstance(v, torch.Tensor):
                     batch[k] = v.to(torch_device)
@@ -242,7 +256,10 @@ def create_server(
         if denormalize_action is not None:
             actions_np = actions.cpu().numpy()
             d = denormalize_action(
-                dict(action=actions_np, task_suite_name=task_suite_name))
+                dict(
+                    action=actions_np,
+                    task_suite_name=task_suite_name,
+                    **denormalize_context))
             actions = torch.from_numpy(d.astype(np.float32))
 
         action_bytes = serialize_actions(actions)
@@ -257,8 +274,8 @@ def create_server(
         if should_print:
             print(
                 f'[VLAServer] req={n}  '
-                f'infer={infer_time*1000:.1f}ms  '
-                f'avg_infer={avg*1000:.1f}ms',
+                'infer={:.1f}ms  '.format(infer_time * 1000) +
+                'avg_infer={:.1f}ms'.format(avg * 1000),
                 flush=True)
 
         return {'action_data': action_bytes, 'infer_time': infer_time}

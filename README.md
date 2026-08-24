@@ -44,9 +44,10 @@ FluxVLA Engine is a full-stack, end-to-end engineering platform for deploying em
 
 #### RoboCasa GR1
 
-| Model          | Training Data      | Cabinet | Drawer | Microwave | Generalization | Average                                                                                                                        |
-| -------------- | ------------------ | ------- | ------ | --------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| FluxVLA(GR00T) | 24 tasks, 30 demos | 22.7%   | 35.7%  | 32.5%     | 48.9%          | [44.3%(50trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64) |
+| Model          | Training Data       | Cabinet | Drawer | Microwave | Generalization | Average                                                                                                                                 |
+| -------------- | ------------------- | ------- | ------ | --------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| FluxVLA(GR00T) | 24 tasks, 30 demos  | 22.7%   | 35.7%  | 32.5%     | 48.9%          | [44.3%(50trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64)          |
+| FluxVLA(PI0.5) | 24 tasks, full data | 60.00%  | 51.00% | 52.00%    | 47.44%         | [49.17% (50 trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
 
 #### Notes
 
@@ -54,7 +55,7 @@ FluxVLA Engine is a full-stack, end-to-end engineering platform for deploying em
 - `Drawer`: `PnPCanToDrawerClose` + `PnPCupToDrawerClose`.
 - `Microwave`: `PnPMilkToMicrowaveClose` + `PnPPotatoToMicrowaveClose`.
 - `Generalization`: the remaining 18 post-train novel tasks.
-- The RoboCasa GR00T result is evaluated with 50 trials per task.
+- The RoboCasa results are evaluated with 50 trials per task.
 
 ## 📢 Latest News
 
@@ -542,6 +543,95 @@ For full-data RoboCasa GR1 training, replace the include pattern with
 </details>
 
 <details>
+<summary><b>Compute PI0.5 normalization statistics</b></summary>
+
+Recompute normalization statistics whenever the PI0.5 training data, robot
+action semantics, action horizon, or terminal-padding policy changes. Run the
+tool from the FluxVLA repository root in the project environment:
+
+```bash
+conda activate fluxvla
+
+# ALOHA: relative joints and absolute grippers.
+python tools/compute_pi05_norm_stats.py /path/to/aloha \
+  --profile aloha --action-key observation.state \
+  --gripper-input-range=-0.01,0.08 --action-horizon 50 \
+  --variable-name _PI05_ALOHA_STATS --output /tmp/aloha_stats.py
+
+# UR3: six relative joints and an absolute gripper.
+python tools/compute_pi05_norm_stats.py /path/to/ur3 \
+  --profile ur3 --action-horizon 50 \
+  --variable-name _PI05_UR3_STATS --output /tmp/ur3_stats.py
+
+# Dual Franka joint-position actions: relative joints and absolute grippers.
+python tools/compute_pi05_norm_stats.py /path/to/franka \
+  --profile franka-qpos --action-horizon 50 \
+  --variable-name _PI05_FRANKA_QPOS_STATS \
+  --output /tmp/franka_qpos_stats.py
+
+# Dual Franka Cartesian poses: fully absolute actions.
+python tools/compute_pi05_norm_stats.py /path/to/franka \
+  --profile franka-eepose --action-horizon 50 \
+  --variable-name _PI05_FRANKA_EEPOSE_STATS \
+  --output /tmp/franka_eepose_stats.py
+
+# RoboCasa GR1: relative arm/waist joints and absolute Fourier-hand commands.
+python tools/compute_pi05_norm_stats.py /path/to/robocasa_lerobot_V2.1 \
+  --profile robocasa-joint-delta --action-horizon 16 \
+  --statistic-name robocasa_gr1_24tasks_joint_delta \
+  --variable-name _PI05_ROBOCASA_STATS \
+  --output /tmp/pi05_robocasa_joint_delta_stats.py
+```
+
+The tool applies the robot coordinate/sign transform first, converts the
+selected action dimensions to deltas second, and computes statistics last. Its
+default output is a Python literal containing `mean`, `std`, `min`, `max`,
+`q01`, and `q99`; paste it into the corresponding config and pass it as
+`dataset_statistics`. PI0.5 uses `q01`/`q99` quantile normalization.
+
+For example, after generating `/tmp/aloha_stats.py`, copy its complete
+`_PI05_ALOHA_STATS = {...}` definition into
+`configs/pi05/pi05_paligemma_aloha_full_finetune.py`, replacing the existing
+definition. Then make sure the same variable is used by both training and
+action denormalization:
+
+```python
+# Paste the contents generated in /tmp/aloha_stats.py here.
+_PI05_ALOHA_STATS = {
+    # Generated statistics dictionary.
+}
+
+train_dataloader = dict(
+    dataset=dict(
+        dataset_statistics=_PI05_ALOHA_STATS,
+        # Other dataset settings...
+    ),
+)
+
+eval = dict(
+    denormalize_action=dict(
+        norm_stats=_PI05_ALOHA_STATS,
+        # Other postprocessing settings...
+    ),
+)
+```
+
+Use the corresponding generated variable and target config for UR3, Franka,
+or RoboCasa. If an evaluation config embeds normalization statistics directly,
+replace those with the same newly generated statistics as well.
+
+Terminal padding is included by default. Add `--exclude-terminal-padding` if
+the config masks padded actions from the loss. The default action-window start
+is `0`; set `--window-start-index` only when the config intentionally uses a
+different offset. For large datasets, use `--temp-dir /path/with/free-space`
+to place temporary memory-mapped files on a disk with sufficient capacity.
+
+Run `python tools/compute_pi05_norm_stats.py --help` for the available profiles
+and overrides such as custom state/action keys and delta masks.
+
+</details>
+
+<details>
 <summary><b>ARM datasets</b></summary>
 
 The built-in ARM example config `configs/arm/arm_clip_aloha_example.py` expects a progress-labeled LeRobot v3.x dataset at `./datasets/ARM_manual_test_10Episodes_lerobotv3.0`.
@@ -692,22 +782,22 @@ For ARM and SARM workflows, you typically need a CLIP checkpoint for training / 
 <details>
 <summary><b>VLA models</b></summary>
 
-| Model                   | Size | Download link                                                                                                                                  |
-| ----------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| GR00T N1.5              | 3B   | [🤗 Hugging Face](https://huggingface.co/nvidia/GR00T-N1.5-3B/tree/main)                                                                       |
-| OpenVLA                 | 7B   | [🤗 Hugging Face](https://huggingface.co/openvla/openvla-7b)                                                                                   |
-| FastWAM_base            | 5B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                                    |
-| PI0_base                | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                                        |
-| PI05_base               | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                                       |
-| PI05_libero             | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                                     |
-| PI05 RoboCasa full-data | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_21aa5e82a_bs256) |
-| SmolVLA                 | 450M | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                                 |
+| Model                   | Size | Download link                                                                                                                        |
+| ----------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| GR00T N1.5              | 3B   | [🤗 Hugging Face](https://huggingface.co/nvidia/GR00T-N1.5-3B/tree/main)                                                             |
+| OpenVLA                 | 7B   | [🤗 Hugging Face](https://huggingface.co/openvla/openvla-7b)                                                                         |
+| FastWAM_base            | 5B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                          |
+| PI0_base                | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                              |
+| PI05_base               | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                             |
+| PI05_libero             | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                           |
+| PI05 RoboCasa full-data | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
+| SmolVLA                 | 450M | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                       |
 
 Download the PI0.5 RoboCasa full-data checkpoint while preserving the path expected by the config:
 
 ```bash
 hf download limxdynamics/FluxVLAEngine \
-  --include "pi05_paligemma_robocasa_full_data_full_finetune_21aa5e82a_bs256/*" \
+  --include "pi05_paligemma_robocasa_full_data_full_finetune_bs256/*" \
   --local-dir ./checkpoints
 ```
 

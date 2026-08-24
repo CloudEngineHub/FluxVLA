@@ -44,9 +44,10 @@ FluxVLA Engine は、具現知能（Embodied Intelligence）の実運用を見�
 
 #### RoboCasa GR1
 
-| モデル         | 学習データ         | Cabinet | Drawer | Microwave | Generalization | Average                                                                                                                        |
-| -------------- | ------------------ | ------- | ------ | --------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| FluxVLA(GR00T) | 24 タスク、30 デモ | 22.7%   | 35.7%  | 32.5%     | 48.9%          | [44.3%(50trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64) |
+| モデル         | 学習データ          | Cabinet | Drawer | Microwave | Generalization | Average                                                                                                                                         |
+| -------------- | ------------------- | ------- | ------ | --------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| FluxVLA(GR00T) | 24 タスク、30 デモ  | 22.7%   | 35.7%  | 32.5%     | 48.9%          | [44.3%(50trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64)                  |
+| FluxVLA(PI0.5) | 24 タスク、全データ | 60.00%  | 51.00% | 52.00%    | 47.44%         | [49.17%（各タスク 50 試行）](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
 
 #### 注記
 
@@ -54,7 +55,7 @@ FluxVLA Engine は、具現知能（Embodied Intelligence）の実運用を見�
 - `Drawer`：`PnPCanToDrawerClose` + `PnPCupToDrawerClose`。
 - `Microwave`：`PnPMilkToMicrowaveClose` + `PnPPotatoToMicrowaveClose`。
 - `Generalization`：残り 18 個のポストトレーニング新規タスク。
-- RoboCasa GR00T の結果は、各タスク 50 試行で評価しています。
+- RoboCasa の結果は、各タスク 50 試行で評価しています。
 
 ## 📢 最新情報
 
@@ -490,6 +491,93 @@ huggingface-cli download limxdynamics/FluxVLAData \
 </details>
 
 <details>
+<summary><b>PI0.5 正規化統計量の計算</b></summary>
+
+PI0.5 の学習データ、ロボットのアクション定義、アクションホライズン、または終端
+padding の方針を変更した場合は、正規化統計量を再計算してください。FluxVLA
+リポジトリのルートでプロジェクト環境を有効にしてから実行します：
+
+```bash
+conda activate fluxvla
+
+# ALOHA：関節は相対アクション、グリッパーは絶対アクション。
+python tools/compute_pi05_norm_stats.py /path/to/aloha \
+  --profile aloha --action-key observation.state \
+  --gripper-input-range=-0.01,0.08 --action-horizon 50 \
+  --variable-name _PI05_ALOHA_STATS --output /tmp/aloha_stats.py
+
+# UR3：6 関節は相対アクション、グリッパーは絶対アクション。
+python tools/compute_pi05_norm_stats.py /path/to/ur3 \
+  --profile ur3 --action-horizon 50 \
+  --variable-name _PI05_UR3_STATS --output /tmp/ur3_stats.py
+
+# 双腕 Franka の関節位置：関節は相対アクション、グリッパーは絶対アクション。
+python tools/compute_pi05_norm_stats.py /path/to/franka \
+  --profile franka-qpos --action-horizon 50 \
+  --variable-name _PI05_FRANKA_QPOS_STATS \
+  --output /tmp/franka_qpos_stats.py
+
+# 双腕 Franka のデカルト姿勢：すべて絶対アクション。
+python tools/compute_pi05_norm_stats.py /path/to/franka \
+  --profile franka-eepose --action-horizon 50 \
+  --variable-name _PI05_FRANKA_EEPOSE_STATS \
+  --output /tmp/franka_eepose_stats.py
+
+# RoboCasa GR1：両腕と腰の関節は相対アクション、Fourier ハンド命令は絶対値。
+python tools/compute_pi05_norm_stats.py /path/to/robocasa_lerobot_V2.1 \
+  --profile robocasa-joint-delta --action-horizon 16 \
+  --statistic-name robocasa_gr1_24tasks_joint_delta \
+  --variable-name _PI05_ROBOCASA_STATS \
+  --output /tmp/pi05_robocasa_joint_delta_stats.py
+```
+
+このツールは、ロボット座標系／符号の変換、指定したアクション次元の相対化、統計量の計算、という順序で処理します。デフォルト出力は
+`mean`、`std`、`min`、`max`、`q01`、`q99` を含む Python
+リテラルです。対応する設定へ貼り付け、`dataset_statistics` として渡してください。PI0.5
+は `q01`/`q99` 分位点正規化を使用します。
+
+たとえば `/tmp/aloha_stats.py` を生成した後、その中の完全な
+`_PI05_ALOHA_STATS = {...}` 定義を
+`configs/pi05/pi05_paligemma_aloha_full_finetune.py` にコピーして既存の定義を置き換え、学習とアクションの逆正規化で同じ変数を使用します：
+
+```python
+# /tmp/aloha_stats.py で生成された内容をここに貼り付けます。
+_PI05_ALOHA_STATS = {
+    # 生成された統計量の辞書。
+}
+
+train_dataloader = dict(
+    dataset=dict(
+        dataset_statistics=_PI05_ALOHA_STATS,
+        # その他のデータセット設定...
+    ),
+)
+
+eval = dict(
+    denormalize_action=dict(
+        norm_stats=_PI05_ALOHA_STATS,
+        # その他の後処理設定...
+    ),
+)
+```
+
+UR3、Franka、RoboCasa でも同様に、生成された変数定義を対応する config
+へコピーし、`dataset_statistics` で使用する変数を置き換えてください。評価 config
+が正規化統計量を直接参照している場合は、そちらも同じ新しい統計量へ更新します。
+
+終端 padding はデフォルトで統計に含まれます。設定が padding アクションを loss
+から除外する場合は `--exclude-terminal-padding` を追加してください。アクションウィンドウの開始位置はデフォルトで
+`0` です。設定で意図的に別のオフセットを使う場合にのみ `--window-start-index`
+を指定します。大規模データセットでは、`--temp-dir /path/with/free-space`
+を使い、一時メモリマップファイルを十分な空き容量のあるディスクに配置してください。
+
+利用可能な profile、カスタム状態／アクションキー、相対アクション mask
+などの上書きオプションは、`python tools/compute_pi05_norm_stats.py --help`
+で確認できます。
+
+</details>
+
+<details>
 <summary><b>ARM データセット</b></summary>
 
 組み込みの ARM サンプル設定 `configs/arm/arm_clip_aloha_example.py` は、progress ラベル付きの LeRobot v3.x データセットが `./datasets/ARM_manual_test_10Episodes_lerobotv3.0` にあることを前提にしています。
@@ -623,22 +711,22 @@ ARM と SARM のワークフローでは、通常は学習 / 推論用の CLIP �
 <details>
 <summary><b>VLA モデル</b></summary>
 
-| モデル                    | サイズ | ダウンロードリンク                                                                                                                             |
-| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| GR00T N1.5                | 3B     | [🤗 Hugging Face](https://huggingface.co/nvidia/GR00T-N1.5-3B/tree/main)                                                                       |
-| OpenVLA                   | 7B     | [🤗 Hugging Face](https://huggingface.co/openvla/openvla-7b)                                                                                   |
-| FastWAM_base              | 5B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                                    |
-| PI0_base                  | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                                        |
-| PI05_base                 | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                                       |
-| PI05_libero               | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                                     |
-| PI05 RoboCasa（全データ） | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_21aa5e82a_bs256) |
-| SmolVLA                   | 450M   | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                                 |
+| モデル                    | サイズ | ダウンロードリンク                                                                                                                   |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| GR00T N1.5                | 3B     | [🤗 Hugging Face](https://huggingface.co/nvidia/GR00T-N1.5-3B/tree/main)                                                             |
+| OpenVLA                   | 7B     | [🤗 Hugging Face](https://huggingface.co/openvla/openvla-7b)                                                                         |
+| FastWAM_base              | 5B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                          |
+| PI0_base                  | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                              |
+| PI05_base                 | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                             |
+| PI05_libero               | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                           |
+| PI05 RoboCasa（全データ） | 3B     | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
+| SmolVLA                   | 450M   | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                       |
 
 config が期待するディレクトリ構成を維持したまま PI0.5 RoboCasa full-data checkpoint をダウンロードします：
 
 ```bash
 hf download limxdynamics/FluxVLAEngine \
-  --include "pi05_paligemma_robocasa_full_data_full_finetune_21aa5e82a_bs256/*" \
+  --include "pi05_paligemma_robocasa_full_data_full_finetune_bs256/*" \
   --local-dir ./checkpoints
 ```
 

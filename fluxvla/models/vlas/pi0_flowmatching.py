@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import math
+from functools import partial
 from typing import Callable, Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.cache_utils import Cache
 
 from fluxvla.engines import (VLAS, build_llm_backbone_from_cfg,
@@ -69,6 +72,13 @@ class PI0FlowMatching(BaseVLA):
             of the model.
         ignore_index (int): Index to ignore in loss calculations.
         norm_stats (Dict, optional): Normalization statistics for the model.
+        time_sampler (str): ``beta`` matches OpenPI; the default
+            ``legacy_power_ratio`` preserves existing FluxVLA recipes.
+        loss_action_dim (int, optional): Number of padded action dimensions
+            supervised by flow matching. Defaults to ``ori_action_dim``.
+        openpi_fp32_flow (bool): Keep noise, actions, timestep projections,
+            and the velocity head in FP32, matching OpenPI JAX. Gemma inputs
+            are cast to BF16 at the model boundary.
         **kwargs: Additional keyword arguments for model configuration.
     """
 
@@ -105,7 +115,12 @@ class PI0FlowMatching(BaseVLA):
                  params_to_change_dtype: Optional[List[str]] = [],
                  max_action_dim: int = 7,
                  ori_action_dim: int = None,
+                 loss_action_dim: int = None,
                  num_steps: int = 10,
+                 time_sampler: str = 'legacy_power_ratio',
+                 time_beta_alpha: float = 1.5,
+                 time_beta_beta: float = 1.0,
+                 openpi_fp32_flow: bool = False,
                  rtc_training_config: Optional[Dict] = None,
                  **kwargs):
         super(PI0FlowMatching, self).__init__(
@@ -165,8 +180,46 @@ class PI0FlowMatching(BaseVLA):
         self.strict_mapping = strict_mapping
         self.max_action_dim = max_action_dim
         self.ori_action_dim = ori_action_dim
+        self.loss_action_dim = (
+            ori_action_dim
+            if loss_action_dim is None else int(loss_action_dim))
+        if (self.loss_action_dim is not None
+                and not 0 < self.loss_action_dim <= self.max_action_dim):
+            raise ValueError(
+                'loss_action_dim must be in [1, max_action_dim], got '
+                f'{self.loss_action_dim} with max_action_dim='
+                f'{self.max_action_dim}.')
         self.num_steps = num_steps
+        if time_sampler not in ('beta', 'legacy_power_ratio'):
+            raise ValueError(f'Unsupported time_sampler={time_sampler!r}.')
+        if time_beta_alpha <= 0 or time_beta_beta <= 0:
+            raise ValueError('time_beta_alpha and time_beta_beta must be '
+                             'positive.')
+        self.time_sampler = time_sampler
+        self.time_beta_alpha = float(time_beta_alpha)
+        self.time_beta_beta = float(time_beta_beta)
+        self.openpi_fp32_flow = bool(openpi_fp32_flow)
         self.rtc_training_config = rtc_training_config
+
+    @staticmethod
+    def _disable_autocast(tensor: torch.Tensor):
+        if tensor.device.type in ('cpu', 'cuda'):
+            return torch.autocast(
+                device_type=tensor.device.type, enabled=False)
+        return contextlib.nullcontext()
+
+    def _cast_gemma_input(self, tensor: Optional[torch.Tensor]):
+        if tensor is None:
+            return None
+        if self.openpi_fp32_flow and self.enable_mixed_precision_training:
+            return tensor.to(torch.bfloat16)
+        return tensor
+
+    def _project_action_output(self, suffix_out: torch.Tensor):
+        if not self.openpi_fp32_flow:
+            return self.action_out_proj(suffix_out)
+        with self._disable_autocast(suffix_out):
+            return self.action_out_proj(suffix_out.float())
 
     def to_bfloat16(self):
         for name, param in self.named_parameters():
@@ -185,9 +238,28 @@ class PI0FlowMatching(BaseVLA):
         return noise
 
     def sample_time(self, bsize, device):
-        time_beta = sample_beta(1.5, 1.0, bsize, device)
+        time_beta = sample_beta(
+            self.time_beta_alpha,
+            self.time_beta_beta,
+            bsize,
+            device,
+            sampler=self.time_sampler)
         time = time_beta * 0.999 + 0.001
         return time.to(dtype=torch.float32, device=device)
+
+    def _select_flow_loss_dimensions(self, prediction, target):
+        """Select only the configured action dimensions for supervision."""
+        if self.loss_action_dim is None:
+            return prediction, target
+        if (prediction.shape[-1] < self.loss_action_dim
+                or target.shape[-1] < self.loss_action_dim):
+            raise ValueError(
+                'Flow loss tensors have fewer dimensions than configured: '
+                f'prediction={prediction.shape[-1]}, '
+                f'target={target.shape[-1]}, '
+                f'loss_action_dim={self.loss_action_dim}.')
+        return (prediction[..., :self.loss_action_dim],
+                target[..., :self.loss_action_dim])
 
     def get_attention_interface(self):
         if self.attention_implementation == 'sdpa':
@@ -574,6 +646,11 @@ class PI0FlowMatching(BaseVLA):
         if time is None:
             time = self.sample_time(actions.shape[0], actions.device)
 
+        if self.openpi_fp32_flow:
+            actions = actions.float()
+            noise = noise.float()
+            time = time.float()
+
         # `time` is the sampled scalar flow-matching time, shape (B,).
         # Below we derive `t` which is passed to embed_suffix as the timestep:
         #   - RTC:     t is (B, T), per-position time (delay positions get
@@ -608,6 +685,8 @@ class PI0FlowMatching(BaseVLA):
 
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = (
             self.embed_suffix(states, x_t, t))
+        prefix_embs = self._cast_gemma_input(prefix_embs)
+        suffix_embs = self._cast_gemma_input(suffix_embs)
         inputs_embeds = [prefix_embs, suffix_embs]
         pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
         att_masks = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
@@ -630,10 +709,8 @@ class PI0FlowMatching(BaseVLA):
         suffix_out = suffix_out[:, -self.n_action_steps:]
         # Original openpi code, upcast attention output
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
-        if self.ori_action_dim is not None:
-            v_t = v_t[:, :, :self.ori_action_dim]
-            u_t = u_t[:, :, :self.ori_action_dim]
+        v_t = self._project_action_output(suffix_out)
+        v_t, u_t = self._select_flow_loss_dimensions(v_t, u_t)
         losses = F.mse_loss(u_t, v_t, reduction='none')
         sample_weight = kwarg.get('sample_weight')
         loss = reduce_action_bc_loss(
@@ -730,6 +807,7 @@ class PI0FlowMatching(BaseVLA):
             lang_tokens=lang_tokens,
             img_masks=img_masks,
             lang_masks=lang_masks)
+        prefix_embs = self._cast_gemma_input(prefix_embs)
 
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks,
                                                 prefix_att_masks)
@@ -801,6 +879,7 @@ class PI0FlowMatching(BaseVLA):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = (
             self.embed_suffix(states, x_t, timestep))
+        suffix_embs = self._cast_gemma_input(suffix_embs)
 
         suffix_len = suffix_pad_masks.shape[1]
         batch_size = prefix_pad_masks.shape[0]
@@ -833,7 +912,7 @@ class PI0FlowMatching(BaseVLA):
             adarms_cond=[None, adarms_cond])
         suffix_out = suffix_out[:, -self.n_action_steps:]
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
+        v_t = self._project_action_output(suffix_out)
         return v_t
 
     def get_fsdp_wrapping_policy(self) -> Callable:
@@ -869,3 +948,54 @@ class PI0FlowMatching(BaseVLA):
             return False
 
         return build_combined_wrap_policy([*wrapping_policies, match_module])
+
+    def get_fsdp_execution_block_wrapping_policy(self) -> Callable:
+        """Wrap modules whose ``forward`` methods PI0 actually executes.
+
+        The legacy policy wraps individual linear and normalization modules,
+        producing hundreds of tiny collectives on a multi-node global process
+        group. PI0 also bypasses ``GemmaDecoderLayer.forward`` in its fused
+        prefix/suffix path, so wrapping full decoder layers would leave their
+        sharded parameters inaccessible. Gemma MLPs and SigLIP encoder layers
+        are real execution boundaries and are safe, coarse FSDP units.
+        """
+        try:
+            vision_layers = (
+                self.vision_backbone.vision.vision_model.encoder.layers)
+        except AttributeError as exc:
+            raise ValueError(
+                'Execution-block FSDP requires a SigLIP-style vision '
+                'encoder with an encoder.layers module list.') from exc
+        if not vision_layers:
+            raise ValueError('The vision encoder has no execution blocks.')
+
+        vision_layer_classes = {type(layer) for layer in vision_layers}
+        if len(vision_layer_classes) != 1:
+            names = sorted(cls.__name__ for cls in vision_layer_classes)
+            raise ValueError(
+                'Vision execution blocks must share one class, got '
+                f'{names}.')
+
+        mlp_classes = set()
+        for backbone_name in ('llm_backbone', 'llm_expert'):
+            backbone = getattr(self, backbone_name, None)
+            try:
+                layers = backbone.layers
+            except AttributeError as exc:
+                raise ValueError('Execution-block FSDP requires '
+                                 f'{backbone_name}.layers.') from exc
+            if not layers:
+                raise ValueError(f'{backbone_name} has no transformer layers.')
+            if any(not hasattr(layer, 'mlp') for layer in layers):
+                raise ValueError(
+                    f'Every {backbone_name} layer must expose an MLP.')
+            mlp_classes.update(type(layer.mlp) for layer in layers)
+
+        if len(mlp_classes) != 1:
+            names = sorted(cls.__name__ for cls in mlp_classes)
+            raise ValueError('Gemma execution MLPs must share one class, got '
+                             f'{names}.')
+
+        return partial(
+            transformer_auto_wrap_policy,
+            transformer_layer_cls=vision_layer_classes | mlp_classes)

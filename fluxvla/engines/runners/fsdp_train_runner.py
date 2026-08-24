@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: MIT
 # Notes: Attribution normalized; no functional change.
 
+import copy
+import gc
 import math
 import os
 from collections import OrderedDict
@@ -62,8 +64,17 @@ class FSDPTrainRunner(BaseTrainRunner):
             Defaults to True.
         mixed_precision_dtype (str, optional): Data type for mixed precision
             training.  Defaults to 'bf16'.
+        keep_params_fp32 (bool, optional): Keep master parameters and floating
+            batch inputs in FP32 while autocast controls compute precision.
+            Defaults to False.
+        deterministic_algorithms (bool, optional): Require deterministic
+            PyTorch/CUDA kernels, including SDPA backward. Defaults to False.
         sharding_strategy (str, optional): Sharding strategy for FSDP.
-            Defaults to 'full-shard'.
+            Defaults to 'hybrid-shard'.
+        fsdp_wrap_policy (str, optional): FSDP auto-wrap granularity. ``model``
+            uses the model's existing policy, ``execution-block`` uses an
+            execution-aware policy supplied by the model, and ``root`` wraps
+            only the root module. Defaults to ``model``.
     """
 
     def __init__(self,
@@ -83,9 +94,14 @@ class FSDPTrainRunner(BaseTrainRunner):
                  enable_mixed_precision_training: bool = True,
                  reduce_in_full_precision: bool = True,
                  mixed_precision_dtype: str = 'bf16',
+                 keep_params_fp32: bool = False,
                  grad_accumulation_steps: int = 1,
+                 deterministic_algorithms: bool = False,
+                 ema_decay: Optional[float] = None,
+                 seed: Optional[int] = None,
                  evaluator: Optional[Dict] = None,
                  sharding_strategy: str = 'hybrid-shard',
+                 fsdp_wrap_policy: str = 'model',
                  change_key_name: bool = False,
                  tokenizer: Optional[Dict] = None,
                  resume_from: Optional[str] = None,
@@ -113,7 +129,11 @@ class FSDPTrainRunner(BaseTrainRunner):
             enable_mixed_precision_training=enable_mixed_precision_training,
             reduce_in_full_precision=reduce_in_full_precision,
             mixed_precision_dtype=mixed_precision_dtype,
+            keep_params_fp32=keep_params_fp32,
             grad_accumulation_steps=grad_accumulation_steps,
+            deterministic_algorithms=deterministic_algorithms,
+            ema_decay=ema_decay,
+            seed=seed,
             evaluator=evaluator,
             tokenizer=tokenizer,
             resume_from=resume_from)
@@ -121,7 +141,12 @@ class FSDPTrainRunner(BaseTrainRunner):
         self.args = args
         self.max_grad_norm = max_grad_norm
         self.sharding_strategy = sharding_strategy
-        if self.sharding_strategy == 'shard-grad-op':
+        if self.sharding_strategy == 'global-shard-grad-op':
+            # Use the default global process group. Unlike the private
+            # hybrid Zero2 strategy below, this does not create one extra
+            # inter-node communicator per local rank.
+            self.fsdp_sharding_strategy = ShardingStrategy.SHARD_GRAD_OP
+        elif self.sharding_strategy == 'shard-grad-op':
             self.fsdp_sharding_strategy = ShardingStrategy._HYBRID_SHARD_ZERO2
         elif self.sharding_strategy == 'full-shard':
             self.fsdp_sharding_strategy = ShardingStrategy.FULL_SHARD
@@ -133,10 +158,62 @@ class FSDPTrainRunner(BaseTrainRunner):
             raise ValueError(
                 f'FSDP Sharding Strategy {sharding_strategy} is not supported!'
             )
+        if fsdp_wrap_policy not in ('model', 'execution-block', 'root'):
+            raise ValueError(
+                'FSDP wrap policy must be one of model, execution-block, '
+                f'or root, got {fsdp_wrap_policy!r}.')
+        self.fsdp_wrap_policy = fsdp_wrap_policy
         self.change_key_name = change_key_name
         self.fsdp_state_dict_type = StateDictType.FULL_STATE_DICT
         self.fsdp_save_policy = FullStateDictConfig(
             offload_to_cpu=True, rank0_only=True)
+
+    @classmethod
+    def _move_checkpoint_tensors_to_cpu(cls, value):
+        """Build a CPU checkpoint tree without mutating live state."""
+        if isinstance(value, torch.Tensor):
+            if value.device.type == 'cpu':
+                return value
+            return value.detach().cpu()
+        if isinstance(value, dict):
+            converted = copy.copy(value)
+            converted.clear()
+            for key, item in value.items():
+                converted[key] = cls._move_checkpoint_tensors_to_cpu(item)
+            if hasattr(value, '_metadata'):
+                converted._metadata = cls._move_checkpoint_tensors_to_cpu(
+                    value._metadata)
+            return converted
+        if isinstance(value, list):
+            return [
+                cls._move_checkpoint_tensors_to_cpu(item) for item in value
+            ]
+        if isinstance(value, tuple):
+            converted = tuple(
+                cls._move_checkpoint_tensors_to_cpu(item) for item in value)
+            if hasattr(value, '_fields'):
+                return type(value)(*converted)
+            if type(value) is not tuple:
+                try:
+                    return type(value)(converted)
+                except TypeError:
+                    pass
+            return converted
+        return value
+
+    def _format_model_state_dict(self, state_dict):
+        if not self.change_key_name:
+            return state_dict
+        formatted = {
+            module_key: OrderedDict()
+            for module_key in self.all_module_keys
+        }
+        for key, parameter in state_dict.items():
+            for module_key in formatted:
+                prefix = f'{module_key}.'
+                if key.startswith(prefix):
+                    formatted[module_key][key.removeprefix(prefix)] = parameter
+        return formatted
 
     def save_checkpoint(
         self,
@@ -172,22 +249,21 @@ class FSDPTrainRunner(BaseTrainRunner):
         # Summon Full State Dictionary =>> Reconstitute from Shards
         with FSDP.state_dict_type(self.vla, self.fsdp_state_dict_type,
                                   self.fsdp_save_policy):
-            full_vla_state_dict = self.vla.state_dict()
-
-            # Iterate through `full_vlm_state_dict` and split
-            # `mkey.{full_dotted_path}` -> `mkey: {full_dotted_path}`
-            if self.change_key_name:
-                model_state_dicts = {
-                    mkey: OrderedDict()
-                    for mkey in self.all_module_keys
-                }
-                for key, param in full_vla_state_dict.items():
-                    for mkey in model_state_dicts:
-                        if key.startswith(mprefix := f'{mkey}.'):
-                            model_state_dicts[mkey][key.removeprefix(
-                                mprefix)] = param
+            full_vla_state_dict = self._move_checkpoint_tensors_to_cpu(
+                self.vla.state_dict())
+            train_model_state_dicts = None
+            if getattr(self, '_ema_params', None) is not None:
+                with self._use_ema_parameters():
+                    full_ema_state_dict = (
+                        self._move_checkpoint_tensors_to_cpu(
+                            self.vla.state_dict()))
+                train_model_state_dicts = self._format_model_state_dict(
+                    full_vla_state_dict)
+                model_state_dicts = self._format_model_state_dict(
+                    full_ema_state_dict)
             else:
-                model_state_dicts = full_vla_state_dict
+                model_state_dicts = self._format_model_state_dict(
+                    full_vla_state_dict)
 
             # Get full optimizer state dict for FSDP
             # FSDP shards optimizer states, so we need to gather the full state
@@ -208,8 +284,16 @@ class FSDPTrainRunner(BaseTrainRunner):
                 dist.barrier()
                 full_optimizer_state_dict = FSDP.full_optim_state_dict(
                     self.vla, self.optimizer)
+                full_optimizer_state_dict = (
+                    self._move_checkpoint_tensors_to_cpu(
+                        full_optimizer_state_dict))
             else:
                 full_optimizer_state_dict = None
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
 
             # Save on rank zero *only*
             if overwatch.is_rank_zero():
@@ -233,6 +317,9 @@ class FSDPTrainRunner(BaseTrainRunner):
                     'global_step': global_step,
                     'epoch': epoch,
                 }
+                if train_model_state_dicts is not None:
+                    checkpoint_dict['train_model'] = train_model_state_dicts
+                    checkpoint_dict['ema_decay'] = self.ema_decay
 
                 # Save scheduler state
                 if self.lr_scheduler is not None:
@@ -272,6 +359,15 @@ class FSDPTrainRunner(BaseTrainRunner):
 
                 self._cleanup_old_checkpoints(checkpoint_dir)
 
+        if overwatch.is_rank_zero():
+            del checkpoint_dict
+        del full_vla_state_dict
+        del model_state_dicts
+        del full_optimizer_state_dict
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def run_setup(self, n_train_examples: int) -> None:
         self.vla.from_pretrained()
         torch.cuda.set_device(device_id := self.device_id)  # noqa: F841
@@ -280,26 +376,35 @@ class FSDPTrainRunner(BaseTrainRunner):
         is_no_shard = (
             self.fsdp_sharding_strategy == ShardingStrategy.NO_SHARD)
 
-        if is_no_shard:
+        if is_no_shard or self.fsdp_wrap_policy == 'root':
             vla_fsdp_wrapping_policy = None
+        elif self.fsdp_wrap_policy == 'execution-block':
+            policy_getter = getattr(
+                self.vla, 'get_fsdp_execution_block_wrapping_policy', None)
+            if not callable(policy_getter):
+                raise ValueError(
+                    f'{type(self.vla).__name__} does not provide an '
+                    'execution-block FSDP wrapping policy.')
+            vla_fsdp_wrapping_policy = policy_getter()
         else:
             vla_fsdp_wrapping_policy = self.vla.get_fsdp_wrapping_policy()
 
         # Assemble the Default FSDP Mixed Precision Policy
         if self.enable_mixed_precision_training and self.mixed_precision_dtype == torch.bfloat16:  # noqa: E501
+            param_dtype = (None if self.keep_params_fp32 else torch.bfloat16)
             if is_no_shard:
                 fsdp_precision_policy = MixedPrecision(
-                    param_dtype=torch.bfloat16,
+                    param_dtype=param_dtype,
                     reduce_dtype=torch.bfloat16,
                     buffer_dtype=torch.bfloat16)
             elif not self.reduce_in_full_precision:
                 fsdp_precision_policy = MixedPrecision(
-                    param_dtype=torch.bfloat16,
+                    param_dtype=param_dtype,
                     reduce_dtype=torch.bfloat16,
                     buffer_dtype=torch.bfloat16)
             else:
                 fsdp_precision_policy = MixedPrecision(
-                    param_dtype=torch.bfloat16,
+                    param_dtype=param_dtype,
                     reduce_dtype=torch.float32,
                     buffer_dtype=torch.float32)
         else:
@@ -310,7 +415,7 @@ class FSDPTrainRunner(BaseTrainRunner):
 
         self.vla.freeze_backbones()
 
-        if is_no_shard:
+        if is_no_shard and not self.keep_params_fp32:
             target_dtype = torch.bfloat16
         else:
             target_dtype = torch.float32
@@ -358,6 +463,12 @@ class FSDPTrainRunner(BaseTrainRunner):
             limit_all_gathers=True,
             use_orig_params=True,
         )
+        fsdp_unit_count = sum(
+            isinstance(module, FSDP) for module in self.vla.modules())
+        overwatch.info(
+            f'FSDP wrapping created {fsdp_unit_count} units '
+            f'(policy={self.fsdp_wrap_policy}).',
+            ctx_level=1)
 
         # Apply Gradient Checkpointing AFTER FSDP wrapping
         if self.enable_gradient_checkpointing:
@@ -418,12 +529,14 @@ class FSDPTrainRunner(BaseTrainRunner):
             warmup_info = '0'
         # Finalize Setup =>> Log!
         overwatch.info(
-            'FSDP Full-Shard Strategy =>> Finalized Training Setup:\n'  # noqa: E501
+            f'FSDP {self.sharding_strategy} Strategy '
+            f'(wrap={self.fsdp_wrap_policy}) =>> Finalized Training Setup:\n'  # noqa: E231, E501
             f'         |-> Global (Effective) Batch Size = {self.global_batch_size}\n'  # noqa: E221, E501
             f'         |-> Per-Device Batch Size = {self.per_device_batch_size}\n'  # noqa: E221, E501
             f'         |-> Distributed World Size = {overwatch.world_size()}\n'  # noqa: E221, E501
             f'         |-> Gradient Accumulation Steps = {self.grad_accumulation_steps}\n\n'  # noqa: E221, E501
             f'         |-> LLM Backbone FSDP Gradient Checkpointing = {self.enable_gradient_checkpointing}\n'  # noqa: E221, E501
+            f'         |-> Deterministic Algorithms = {self.deterministic_algorithms}\n'  # noqa: E221, E501
             f'         |-> Use FSDP Mixed Precision = {self.enable_mixed_precision_training}\n'  # noqa: E221, E501
             f'                 |-> Parameter Precision = {fsdp_precision_policy.param_dtype}\n'  # noqa: E221, E501
             f'                 |-> Reduction Precision = {fsdp_precision_policy.reduce_dtype}\n'  # noqa: E221, E501
