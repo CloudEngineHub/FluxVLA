@@ -25,6 +25,7 @@ from torch.distributed.fsdp import (MixedPrecision, ShardingStrategy,
                                     StateDictType)
 
 from ..utils import initialize_overwatch
+from ..utils.name_map import str_to_dtype
 from ..utils.root import RUNNERS
 from .base_train_runner import BaseTrainRunner
 
@@ -102,6 +103,7 @@ class FSDPTrainRunner(BaseTrainRunner):
                  evaluator: Optional[Dict] = None,
                  sharding_strategy: str = 'hybrid-shard',
                  fsdp_wrap_policy: str = 'model',
+                 pre_fsdp_param_dtype: Optional[str] = None,
                  change_key_name: bool = False,
                  tokenizer: Optional[Dict] = None,
                  resume_from: Optional[str] = None,
@@ -141,12 +143,15 @@ class FSDPTrainRunner(BaseTrainRunner):
         self.args = args
         self.max_grad_norm = max_grad_norm
         self.sharding_strategy = sharding_strategy
+        self.pre_fsdp_param_dtype = (
+            str_to_dtype(pre_fsdp_param_dtype)
+            if pre_fsdp_param_dtype is not None else None)
         if self.sharding_strategy == 'global-shard-grad-op':
             # Use the default global process group. Unlike the private
             # hybrid Zero2 strategy below, this does not create one extra
             # inter-node communicator per local rank.
             self.fsdp_sharding_strategy = ShardingStrategy.SHARD_GRAD_OP
-        elif self.sharding_strategy == 'shard-grad-op':
+        elif self.sharding_strategy in ('shard-grad-op', 'hybrid-shard-zero2'):
             self.fsdp_sharding_strategy = ShardingStrategy._HYBRID_SHARD_ZERO2
         elif self.sharding_strategy == 'full-shard':
             self.fsdp_sharding_strategy = ShardingStrategy.FULL_SHARD
@@ -214,6 +219,25 @@ class FSDPTrainRunner(BaseTrainRunner):
                 if key.startswith(prefix):
                     formatted[module_key][key.removeprefix(prefix)] = parameter
         return formatted
+
+    def _resolve_fsdp_ignored_modules(self) -> list[nn.Module]:
+        """Resolve model-owned, fully frozen modules excluded from FSDP."""
+        getter = getattr(self.vla, 'get_fsdp_ignored_modules', None)
+        modules = list(getter()) if callable(getter) else []
+        deduped = []
+        seen = set()
+        for module in modules:
+            if not isinstance(module, nn.Module):
+                raise TypeError('get_fsdp_ignored_modules() must return '
+                                'torch.nn.Module instances.')
+            if id(module) in seen:
+                continue
+            if any(param.requires_grad for param in module.parameters()):
+                raise ValueError('FSDP ignored modules must be fully frozen; '
+                                 f'got trainable {type(module).__name__}.')
+            deduped.append(module)
+            seen.add(id(module))
+        return deduped
 
     def save_checkpoint(
         self,
@@ -373,6 +397,9 @@ class FSDPTrainRunner(BaseTrainRunner):
         torch.cuda.set_device(device_id := self.device_id)  # noqa: F841
         torch.cuda.empty_cache()
 
+        self.vla.freeze_backbones()
+        fsdp_ignored_modules = self._resolve_fsdp_ignored_modules()
+
         is_no_shard = (
             self.fsdp_sharding_strategy == ShardingStrategy.NO_SHARD)
 
@@ -413,17 +440,34 @@ class FSDPTrainRunner(BaseTrainRunner):
                 reduce_dtype=torch.float32,
                 buffer_dtype=torch.float32)
 
-        self.vla.freeze_backbones()
-
-        if is_no_shard and not self.keep_params_fp32:
+        if self.pre_fsdp_param_dtype is not None:
+            target_dtype = self.pre_fsdp_param_dtype
+        elif is_no_shard and not self.keep_params_fp32:
             target_dtype = torch.bfloat16
         else:
             target_dtype = torch.float32
+        ignored_param_ids = {
+            id(param)
+            for module in fsdp_ignored_modules
+            for param in module.parameters()
+        }
         for name, param in self.vla.named_parameters():
+            if id(param) in ignored_param_ids:
+                continue
             if param.dtype != target_dtype:
                 param.data = param.data.to(target_dtype)
         overwatch.info(
-            f'Unified all model parameters to {target_dtype}', ctx_level=1)
+            f'Unified FSDP-managed model parameters to {target_dtype}; '
+            f'kept {len(ignored_param_ids):,} frozen parameter tensors in '
+            'their source dtype.',
+            ctx_level=1)
+
+        # FSDP does not own or move ignored modules. Keep them replicated on
+        # each rank in their checkpoint dtype (BF16 for DiT4DiT), matching the
+        # source ZeRO-2 execution and avoiding repeated parameter all-gathers.
+        current_device = torch.device('cuda', torch.cuda.current_device())
+        for module in fsdp_ignored_modules:
+            module.to(device=current_device)
 
         # Collect checkpoint layer classes BEFORE FSDP wrapping
         checkpoint_layer_classes = set()
@@ -459,15 +503,19 @@ class FSDPTrainRunner(BaseTrainRunner):
             auto_wrap_policy=vla_fsdp_wrapping_policy,
             mixed_precision=fsdp_precision_policy,
             sharding_strategy=self.fsdp_sharding_strategy,
+            ignored_modules=(fsdp_ignored_modules or None),
             device_id=torch.cuda.current_device(),
             limit_all_gathers=True,
             use_orig_params=True,
         )
         fsdp_unit_count = sum(
             isinstance(module, FSDP) for module in self.vla.modules())
+        ignored_numel = sum(param.numel() for module in fsdp_ignored_modules
+                            for param in module.parameters())
         overwatch.info(
             f'FSDP wrapping created {fsdp_unit_count} units '
-            f'(policy={self.fsdp_wrap_policy}).',
+            f'(policy={self.fsdp_wrap_policy}); kept '
+            f'{ignored_numel / 1e9:.2f}B frozen parameters replicated.',
             ctx_level=1)
 
         # Apply Gradient Checkpointing AFTER FSDP wrapping

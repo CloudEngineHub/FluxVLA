@@ -126,7 +126,8 @@ class DenormalizeLiberoAction:
                  denorm_action: bool = True,
                  normalize_gripper_action: bool = True,
                  invert_gripper_action: bool = True,
-                 action_norm_mask: List[bool] = None):
+                 action_norm_mask: List[bool] = None,
+                 clip_normalized_action: bool = False):
         if isinstance(norm_stats, str):
             with open(norm_stats, 'r', encoding='utf-8') as f:
                 self.norm_stats = json.load(f)
@@ -139,6 +140,7 @@ class DenormalizeLiberoAction:
         self.normalize_gripper_action = normalize_gripper_action
         self.invert_gripper_action = invert_gripper_action
         self.action_norm_mask = action_norm_mask
+        self.clip_normalized_action = bool(clip_normalized_action)
 
     def __call__(self, data: Dict) -> Dict:
         """Denormalize the data using the provided statistics.
@@ -180,6 +182,8 @@ class DenormalizeLiberoAction:
         assert 'std' in stats and stats['std'] is not None
         if self.action_dim is not None:
             normalized_action = normalized_action[..., :self.action_dim]
+        if self.clip_normalized_action:
+            normalized_action = np.clip(normalized_action, -1.0, 1.0)
 
         if 'mask' in stats:
             mask = np.array(stats['mask'])
@@ -197,6 +201,8 @@ class DenormalizeLiberoAction:
         assert 'q99' in stats and stats['q99'] is not None
         if self.action_dim is not None:
             normalized_action = normalized_action[..., :self.action_dim]
+        if self.clip_normalized_action:
+            normalized_action = np.clip(normalized_action, -1.0, 1.0)
         if self.action_norm_mask is not None:
             mask = np.array(self.action_norm_mask)
         else:
@@ -217,6 +223,8 @@ class DenormalizeLiberoAction:
         assert 'max' in stats and stats['max'] is not None
         if self.action_dim is not None:
             normalized_action = normalized_action[..., :self.action_dim]
+        if self.clip_normalized_action:
+            normalized_action = np.clip(normalized_action, -1.0, 1.0)
         if self.action_norm_mask is not None:
             mask = np.array(self.action_norm_mask)
         else:
@@ -419,6 +427,8 @@ class NormalizeStatesAndActions:
             to [-1, 1]. Defaults to False.
         normalize_states (bool): Whether to normalize states before optional
             padding/truncation. Defaults to True.
+        preserve_input_dtype (bool): Keep normalization arithmetic in the
+            input array dtype even when ``output_dtype`` is configured.
         output_dtype (str | None): Optional NumPy dtype used for normalization
             arithmetic and outputs. ``None`` preserves the legacy NumPy dtype
             promotion behavior. Defaults to None.
@@ -426,6 +436,11 @@ class NormalizeStatesAndActions:
             that contains the state information.
         action_key (str | None): The key in the data dictionary
             that contains the action information. If None, actions are skipped.
+        valid_action_dim (int | None): Number of non-padding action dimensions
+            used when constructing a per-dimension action mask.
+        mark_all_action_steps_valid (bool): Replace the temporal action mask
+            with a mask that enables ``valid_action_dim`` dimensions at every
+            action step. Defaults to False.
     """
 
     def __init__(self,
@@ -440,6 +455,7 @@ class NormalizeStatesAndActions:
                  action_norm_mask: List[bool] = None,
                  clip_norm: bool = False,
                  normalization_epsilon: float = 1e-6,
+                 preserve_input_dtype: bool = False,
                  normalize_states: bool = True,
                  discrete_action_dims: List[int] = None,
                  discrete_state_dims: List[int] = None,
@@ -447,6 +463,8 @@ class NormalizeStatesAndActions:
                  pad_invalid_action_delta_dims: bool = False,
                  delta_action_dim_mask: List[bool] = None,
                  action_pad_mask_key: str = 'action_masks',
+                 valid_action_dim: int = None,
+                 mark_all_action_steps_valid: bool = False,
                  output_dtype: Optional[str] = None,
                  *args,
                  **kwargs):
@@ -460,6 +478,7 @@ class NormalizeStatesAndActions:
         self.state_dim = state_dim
         self.clip_norm = clip_norm
         self.normalization_epsilon = float(normalization_epsilon)
+        self.preserve_input_dtype = bool(preserve_input_dtype)
         self.normalize_states = normalize_states
         self.output_dtype = (None if output_dtype is None else
                              np.dtype(output_dtype))
@@ -468,8 +487,10 @@ class NormalizeStatesAndActions:
             raise ValueError(
                 f'output_dtype must be a floating dtype, got {output_dtype!r}')
         if action_norm_mask is not None:
-            assert len(action_norm_mask) == action_dim, \
-                f'Action norm mask must be of length {action_dim}'
+            if (action_dim is not None and len(action_norm_mask) > action_dim):
+                raise ValueError(
+                    'Action norm mask cannot be wider than the target action '
+                    f'dimension {action_dim}, got {len(action_norm_mask)}.')
             self.action_norm_mask = action_norm_mask
         else:
             self.action_norm_mask = None
@@ -480,6 +501,17 @@ class NormalizeStatesAndActions:
         self.discrete_norm_type = discrete_norm_type
         self.pad_invalid_action_delta_dims = pad_invalid_action_delta_dims
         self.action_pad_mask_key = action_pad_mask_key
+        self.valid_action_dim = (
+            int(valid_action_dim) if valid_action_dim is not None else None)
+        self.mark_all_action_steps_valid = bool(mark_all_action_steps_valid)
+        if self.mark_all_action_steps_valid:
+            if self.action_dim is None or self.valid_action_dim is None:
+                raise ValueError('`action_dim` and `valid_action_dim` are '
+                                 'required when '
+                                 '`mark_all_action_steps_valid=True`.')
+            if not 0 < self.valid_action_dim <= self.action_dim:
+                raise ValueError('`valid_action_dim` must be in '
+                                 '(0, action_dim].')
         if delta_action_dim_mask is not None:
             assert len(delta_action_dim_mask) == action_dim, \
                 f'Delta action dim mask must be of length {action_dim}'
@@ -493,6 +525,12 @@ class NormalizeStatesAndActions:
         actions = None
         if self.action_key is not None and 'actions' in data:
             actions = np.asarray(data['actions'], dtype=np.float32)
+            if (self.action_norm_mask is not None
+                    and len(self.action_norm_mask) != actions.shape[-1]):
+                raise ValueError(
+                    'Action norm mask must match the unpadded action '
+                    f'dimension {actions.shape[-1]}, got '
+                    f'{len(self.action_norm_mask)}.')
             actions = self._zero_padded_delta_action_dims(data, actions)
 
         needs_state_stats = (
@@ -531,6 +569,17 @@ class NormalizeStatesAndActions:
         if self.action_dim is not None and actions is not None:
             data['actions'] = self._pad_or_truncate_last_dim(
                 actions, self.action_dim)
+        if self.output_dtype is not None:
+            data['states'] = np.asarray(data['states']).astype(
+                self.output_dtype, copy=False)
+            if actions is not None:
+                data['actions'] = np.asarray(data['actions']).astype(
+                    self.output_dtype, copy=False)
+        if actions is not None and self.mark_all_action_steps_valid:
+            action_masks = np.zeros(
+                np.asarray(data['actions']).shape, dtype=np.float32)
+            action_masks[..., :self.valid_action_dim] = 1.0
+            data[self.action_pad_mask_key] = action_masks
         return data
 
     def _zero_padded_delta_action_dims(self, data: Dict,
@@ -597,7 +646,7 @@ class NormalizeStatesAndActions:
                            stats: Dict,
                            norm_type: str,
                            norm_mask: List[bool] = None):
-        if self.output_dtype is not None:
+        if self.output_dtype is not None and not self.preserve_input_dtype:
             x = np.asarray(x, dtype=self.output_dtype)
         if norm_type == 'none':
             return x
@@ -610,12 +659,9 @@ class NormalizeStatesAndActions:
     def _normalize(self, x, stats: Dict, norm_mask: List[bool] = None):
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        dtype = self.output_dtype
-        mean = np.asarray(stats['mean'], dtype=dtype)
-        std = np.asarray(stats['std'], dtype=dtype)
-        epsilon = (
-            self.normalization_epsilon if dtype is None else np.asarray(
-                self.normalization_epsilon, dtype=dtype))
+        mean = self._statistics_array(stats['mean'], x)
+        std = self._statistics_array(stats['std'], x)
+        epsilon = self._typed_epsilon(x)
         normalized = (x - mean) / (std + epsilon)
         return np.where(norm_mask, normalized, x)
 
@@ -627,12 +673,9 @@ class NormalizeStatesAndActions:
         assert stats['q99'] is not None
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        dtype = self.output_dtype
-        low = np.asarray(stats['q01'], dtype=dtype)
-        high = np.asarray(stats['q99'], dtype=dtype)
-        epsilon = (
-            self.normalization_epsilon if dtype is None else np.asarray(
-                self.normalization_epsilon, dtype=dtype))
+        low = self._statistics_array(stats['q01'], x)
+        high = self._statistics_array(stats['q99'], x)
+        epsilon = self._typed_epsilon(x)
         normalized = (x - low) / (high - low + epsilon) * 2.0 - 1.0
         if self.clip_norm:
             normalized = np.clip(normalized, -1, 1)
@@ -643,16 +686,116 @@ class NormalizeStatesAndActions:
         assert 'max' in stats and stats['max'] is not None
         if norm_mask is None:
             norm_mask = [True] * x.shape[-1]
-        dtype = self.output_dtype
-        low = np.asarray(stats['min'], dtype=dtype)
-        high = np.asarray(stats['max'], dtype=dtype)
-        epsilon = (
-            self.normalization_epsilon if dtype is None else np.asarray(
-                self.normalization_epsilon, dtype=dtype))
+        low = self._statistics_array(stats['min'], x)
+        high = self._statistics_array(stats['max'], x)
+        epsilon = self._typed_epsilon(x)
         normalized = (x - low) / (high - low + epsilon) * 2.0 - 1.0
         if self.clip_norm:
             normalized = np.clip(normalized, -1, 1)
         return np.where(norm_mask, normalized, x)
+
+    def _statistics_array(self, values, reference: np.ndarray) -> np.ndarray:
+        dtype = (
+            reference.dtype
+            if self.preserve_input_dtype else self.output_dtype)
+        return np.asarray(values, dtype=dtype)
+
+    def _typed_epsilon(self, reference: np.ndarray):
+        dtype = (
+            reference.dtype
+            if self.preserve_input_dtype else self.output_dtype)
+        if dtype is None:
+            return self.normalization_epsilon
+        return np.asarray(self.normalization_epsilon, dtype=dtype)
+
+
+@TRANSFORMS.register_module()
+class SinCosKeys:
+    """Apply sin/cos encoding to vector-valued keys.
+
+    This is useful for source datasets that encode each scalar state dimension
+    as ``[sin(x), cos(x)]`` before concatenating the final proprio vector.
+    ``expand_axis`` can add a preserved singleton/token dimension after the
+    encoding without requiring a model-specific reshape transform.
+    """
+
+    def __init__(self,
+                 keys: List[str],
+                 target_dims=None,
+                 interleave: bool = True,
+                 backend: str = 'numpy',
+                 dtype: str = 'float32',
+                 pad_value: float = 0.0,
+                 expand_axis: Optional[int] = None) -> None:
+        if isinstance(keys, str):
+            keys = [keys]
+        self.keys = keys
+        self.target_dims = target_dims
+        self.interleave = interleave
+        self.backend = str(backend).lower()
+        if self.backend not in ('numpy', 'torch'):
+            raise ValueError("SinCosKeys backend must be 'numpy' or 'torch'.")
+        self.dtype = np.dtype(dtype)
+        self.pad_value = pad_value
+        self.expand_axis = expand_axis
+
+    def __call__(self, data: Dict) -> Dict:
+        for key in self.keys:
+            if key not in data:
+                raise KeyError(f"Key '{key}' not found for SinCosKeys.")
+            data[key] = self._encode_value(key, data[key])
+        return data
+
+    def _target_dim(self, key: str):
+        if self.target_dims is None:
+            return None
+        if isinstance(self.target_dims, dict):
+            return self.target_dims.get(key)
+        return int(self.target_dims)
+
+    def _encode_value(self, key: str, value):
+        is_tensor = torch.is_tensor(value)
+        device = value.device if is_tensor else None
+        tensor_dtype = value.dtype if is_tensor else None
+        arr = value.detach().cpu().numpy() if is_tensor else np.asarray(value)
+        if arr.ndim == 0:
+            raise ValueError(f"SinCosKeys expects vector input for '{key}'.")
+        arr = arr.astype(np.float32, copy=False)
+
+        if self.backend == 'torch':
+            source = torch.from_numpy(arr)
+            sin_value = torch.sin(source).numpy()
+            cos_value = torch.cos(source).numpy()
+        else:
+            sin_value = np.sin(arr)
+            cos_value = np.cos(arr)
+        if self.interleave:
+            encoded = np.stack([sin_value, cos_value],
+                               axis=-1).reshape(*arr.shape[:-1],
+                                                arr.shape[-1] * 2)
+        else:
+            encoded = np.concatenate([sin_value, cos_value], axis=-1)
+
+        target_dim = self._target_dim(key)
+        if target_dim is not None:
+            encoded = self._pad_or_truncate_last_dim(encoded, int(target_dim))
+        if self.expand_axis is not None:
+            encoded = np.expand_dims(encoded, axis=self.expand_axis)
+
+        if is_tensor:
+            dtype = tensor_dtype if tensor_dtype.is_floating_point else None
+            return torch.from_numpy(encoded).to(device=device, dtype=dtype)
+        return encoded.astype(self.dtype, copy=False)
+
+    def _pad_or_truncate_last_dim(self, values: np.ndarray,
+                                  target_dim: int) -> np.ndarray:
+        current_dim = values.shape[-1]
+        if current_dim >= target_dim:
+            return values[..., :target_dim]
+        padded_shape = (*values.shape[:-1], target_dim)
+        padded = np.full(padded_shape, self.pad_value, dtype=values.dtype)
+        padded[..., :current_dim] = values
+        return padded
 
 
 @TRANSFORMS.register_module()
@@ -725,6 +868,8 @@ class LiberoProprioFromInputs:
             state_t = torch.as_tensor(state, dtype=torch.float32)
             state = torch.clamp(state_t * scale + offset, -self.clamp,
                                 self.clamp).numpy()
+        elif self.norm_type == 'none':
+            state = state.astype(np.float32, copy=False)
         else:
             stats = data['norm_stats'][self.stat_key]
             if self.norm_type == 'quantile':
@@ -736,7 +881,7 @@ class LiberoProprioFromInputs:
 
         out = dict(data)
         if self.state_dim is not None:
-            out[self.out_key] = np.zeros((self.state_dim))
+            out[self.out_key] = np.zeros((self.state_dim), dtype=state.dtype)
             out[self.out_key][:state.shape[0]] = state
         else:
             out[self.out_key] = state

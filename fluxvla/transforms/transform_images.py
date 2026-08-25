@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import timm
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from torchvision.transforms import ColorJitter, Compose, RandomCrop, Resize
 from transformers import AutoImageProcessor
@@ -190,37 +191,89 @@ class ResizeImages:
     Args:
         height (int): The target height for the images.
         width (int): The target width for the images.
+        key (str): Input/output dictionary key. Defaults to ``'images'``.
         preserve_leading_dims (bool): If True, treat the last three
             dimensions as CHW and preserve all leading dimensions.
-        backend (str): Resize backend. ``'cv2'`` preserves legacy behavior;
-            ``'torchvision'`` matches torchvision tensor resize semantics.
+        backend (str): Resize backend. ``'cv2'``/``'opencv'`` preserves
+            legacy behavior; ``'torchvision'`` uses torchvision tensor resize;
+            ``'torch'`` uses ``F.interpolate``.
         scale_to_unit_interval (bool): If True, uint8 images are converted to
-            float32 in ``[0, 1]`` before resizing.
+            float32 in ``[0, 1]`` before a torchvision resize.
+        scale_divisor (float | None): Optional divisor applied before a Torch
+            resize. This is useful when interpolation must happen after
+            converting uint8 images to floating point.
+        output_layout (str): ``flattened_chw`` preserves the historical
+            ``[N * 3, H, W]`` output. ``nchw`` returns ``[N, 3, H, W]``.
+        interpolation (str): OpenCV interpolation used by the ``cv2``
+            backend. Defaults to ``'linear'`` for backward compatibility.
     """
 
     def __init__(self,
                  height,
                  width,
+                 key: str = 'images',
                  preserve_leading_dims: bool = False,
                  backend: str = 'cv2',
                  scale_to_unit_interval: bool = False,
+                 scale_divisor: float = None,
+                 output_layout: str = 'flattened_chw',
+                 interpolation: str = 'linear',
                  *args,
                  **kwargs):
         self.height = height
         self.width = width
+        self.key = key
         self.preserve_leading_dims = preserve_leading_dims
-        self.backend = backend
-        self.scale_to_unit_interval = scale_to_unit_interval
-        if self.backend not in ('cv2', 'torchvision'):
-            raise ValueError(
-                f"Unsupported resize backend '{backend}'. Expected 'cv2' "
-                "or 'torchvision'.")
+        self.backend = str(backend).lower()
+        if self.backend == 'opencv':
+            self.backend = 'cv2'
+        if self.backend not in ('cv2', 'torchvision', 'torch'):
+            raise ValueError("ResizeImages backend must be 'cv2', 'opencv', "
+                             "'torchvision', or 'torch'.")
+        self.scale_to_unit_interval = bool(scale_to_unit_interval)
+        self.scale_divisor = (None if scale_divisor is None else
+                              float(scale_divisor))
+        if self.scale_divisor == 0:
+            raise ValueError('ResizeImages scale_divisor cannot be zero.')
+        self.output_layout = str(output_layout).lower()
+        if self.output_layout not in ('flattened_chw', 'nchw'):
+            raise ValueError('ResizeImages output_layout must be '
+                             "'flattened_chw' or 'nchw'.")
+        interpolation = str(interpolation).lower()
+        cv2_interpolations = {
+            'nearest': cv2.INTER_NEAREST,
+            'linear': cv2.INTER_LINEAR,
+            'area': cv2.INTER_AREA,
+            'cubic': cv2.INTER_CUBIC,
+            'lanczos4': cv2.INTER_LANCZOS4,
+        }
+        if interpolation not in cv2_interpolations:
+            raise ValueError('ResizeImages interpolation must be one of '
+                             f'{tuple(cv2_interpolations)}, got '
+                             f'{interpolation!r}.')
+        self.interpolation = interpolation
+        self.cv2_interpolation = cv2_interpolations[interpolation]
         self.torchvision_resize = Resize((self.height, self.width))
 
-    def _resize_single_image(self, image: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _to_chw_numpy(image) -> np.ndarray:
+        if torch.is_tensor(image):
+            image = image.detach().cpu().numpy()
+        image = np.asarray(image)
+        if image.ndim != 3:
+            raise ValueError(
+                f'ResizeImages expects a 3D image, got {image.shape}.')
+        if image.shape[0] == 3:
+            return image
+        if image.shape[-1] == 3:
+            return image.transpose(2, 0, 1)
+        raise ValueError('ResizeImages expects CHW or HWC images with three '
+                         f'channels, got {image.shape}.')
+
+    def _resize_single_image(self, image) -> np.ndarray:
+        image = self._to_chw_numpy(image)
         if self.backend == 'torchvision':
-            if not isinstance(image, torch.Tensor):
-                image = torch.as_tensor(np.asarray(image))
+            image = torch.as_tensor(image)
             if image.dtype == torch.uint8 and self.scale_to_unit_interval:
                 image = image.to(torch.float32) / 255.0
             else:
@@ -229,7 +282,7 @@ class ResizeImages:
         elif self.backend == 'cv2':
             return cv2.resize(
                 image.transpose(1, 2, 0), (self.width, self.height),
-                interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
+                interpolation=self.cv2_interpolation).transpose(2, 0, 1)
 
         raise ValueError(f'Unsupported resize backend: {self.backend}')
 
@@ -247,27 +300,77 @@ class ResizeImages:
             resized_images, axis=0).reshape(*original_shape[:-2], self.height,
                                             self.width)
 
+    @staticmethod
+    def _to_nchw_tensor(images) -> torch.Tensor:
+        tensor = images.detach() if torch.is_tensor(images) else \
+            torch.as_tensor(np.asarray(images))
+        if tensor.ndim == 3:
+            if tensor.shape[0] % 3 != 0:
+                raise ValueError(
+                    'Flattened CHW images must have a leading dimension '
+                    f'divisible by 3, got {tuple(tensor.shape)}.')
+            tensor = tensor.reshape(-1, 3, tensor.shape[-2], tensor.shape[-1])
+        elif tensor.ndim == 4 and tensor.shape[1] == 3:
+            pass
+        elif tensor.ndim == 4 and tensor.shape[-1] == 3:
+            tensor = tensor.permute(0, 3, 1, 2).contiguous()
+        else:
+            raise ValueError('Torch ResizeImages expects [N*3,H,W], '
+                             '[N,3,H,W], or [N,H,W,3], got '
+                             f'{tuple(tensor.shape)}.')
+        return tensor.to(dtype=torch.float32)
+
+    def _resize_with_torch(self, images) -> torch.Tensor:
+        images = self._to_nchw_tensor(images)
+        if self.scale_divisor is not None:
+            images = images / self.scale_divisor
+        resized = F.interpolate(
+            images,
+            size=(self.height, self.width),
+            mode='bilinear',
+            align_corners=False,
+        ).contiguous()
+        if self.output_layout == 'flattened_chw':
+            return resized.reshape(-1, self.height, self.width)
+        return resized
+
     def __call__(self, data: dict):
-        assert 'images' in data, "Input data must contain 'images' key"
+        if self.key not in data:
+            raise KeyError(f"Input data must contain '{self.key}' key")
+        if self.backend == 'torch':
+            data[self.key] = self._resize_with_torch(data[self.key])
+            return data
         if self.preserve_leading_dims:
-            data['images'] = self._resize_preserve_leading_dims(
-                np.asarray(data['images']))
+            data[self.key] = self._resize_preserve_leading_dims(
+                np.asarray(data[self.key]))
             return data
 
-        if isinstance(data['images'], np.ndarray):
-            assert data['images'].ndim == 3, \
-                "Input 'images' must be a 4D numpy array"
-            images = data['images'].reshape(-1, 3, data['images'].shape[-2],
-                                            data['images'].shape[-1])
+        source = data[self.key]
+        if isinstance(source, np.ndarray):
+            if source.ndim == 3 and source.shape[-1] == 3 \
+                    and source.shape[0] != 3:
+                images = [source]
+            elif source.ndim == 3:
+                images = source.reshape(-1, 3, source.shape[-2],
+                                        source.shape[-1])
+            elif source.ndim == 4:
+                images = source
+            else:
+                raise ValueError('ResizeImages expects a list of images, a '
+                                 '3D flattened CHW array, or a 4D image '
+                                 f'array, got {source.shape}.')
 
         else:
-            images = data['images']
+            images = source
         resized_images = list()
         for image in images:
             resized_images.append(self._resize_single_image(image))
 
-        resized_images = np.concatenate(resized_images, axis=0)
-        data['images'] = resized_images
+        if self.output_layout == 'nchw':
+            resized_images = np.stack(resized_images, axis=0)
+        else:
+            resized_images = np.concatenate(resized_images, axis=0)
+        data[self.key] = resized_images
         return data
 
 
@@ -1280,13 +1383,42 @@ class SimpleNormalizeImages:
         None: This transform does not require any parameters.
     """
 
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self,
+                 key: str = 'images',
+                 preserve_leading_dims: bool = False,
+                 output_type: str = 'numpy',
+                 *args,
+                 **kwargs):
+        if output_type not in ('numpy', 'torch'):
+            raise ValueError("output_type must be either 'numpy' or 'torch'.")
+        self.key = key
+        self.preserve_leading_dims = bool(preserve_leading_dims)
+        self.output_type = output_type
 
     def __call__(self, data: dict):
-        assert 'images' in data, "Input data must contain 'images' key"
-        images = data['images'].reshape(-1, 3, data['images'].shape[-2],
-                                        data['images'].shape[-1])
+        if self.key not in data:
+            raise KeyError(f"Input data must contain '{self.key}' key")
+
+        if self.output_type == 'torch':
+            images = data[self.key]
+            if not torch.is_tensor(images):
+                images = torch.as_tensor(np.asarray(images))
+            images = images.to(dtype=torch.float32)
+            normalized = (images / 255.0) * 2.0 - 1.0
+            if not self.preserve_leading_dims:
+                normalized = normalized.reshape(-1, 3, normalized.shape[-2],
+                                                normalized.shape[-1])
+                normalized = normalized.reshape(-1, normalized.shape[-2],
+                                                normalized.shape[-1])
+            data[self.key] = normalized
+            return data
+
+        source = np.asarray(data[self.key])
+        if self.preserve_leading_dims:
+            data[self.key] = (source / 255.0) * 2.0 - 1.0
+            return data
+
+        images = source.reshape(-1, 3, source.shape[-2], source.shape[-1])
 
         normalized_images = list()
         for image in images:
@@ -1295,7 +1427,7 @@ class SimpleNormalizeImages:
             normalized_images.append(normalized_image)
 
         normalized_images = np.concatenate(normalized_images, axis=0)
-        data['images'] = normalized_images
+        data[self.key] = normalized_images
         return data
 
 
@@ -1703,7 +1835,13 @@ class ResizeAndReflectPad:
 
 @TRANSFORMS.register_module()
 class PrepareVideo:
-    """Reshape multi-view / temporal image arrays into ``[C, T, H, W]``.
+    """Reshape multi-view / temporal image arrays into the video layout
+    expected by video backbones: ``[C, T, H, W]`` per sample. Multiple camera
+    views can be tiled vertically or horizontally before batching.
+
+    This transform should be placed **after** ``SimpleNormalizeImages`` (or any
+    other pixel-level transform) so that the spatial content is final before
+    rearrangement.
 
     Args:
         num_views (int): Number of camera views. Default: 2.
@@ -1713,6 +1851,11 @@ class PrepareVideo:
         top_view (int): Full-size top view for ``"top_bottom_pair"``.
         bottom_views (Tuple[int, int]): View indexes tiled left-to-right under
             the top view for ``"top_bottom_pair"``.
+        combine_view_masks (bool): Collapse one mask per view into one mask
+            per tiled video frame. Disabled by default for compatibility.
+        input_layout (str): Layout for an already composed 4D video. ``tchw``
+            converts it to CTHW, ``cthw`` leaves it unchanged, and ``auto``
+            infers the channel axis. Defaults to ``auto``.
     """
 
     def __init__(self,
@@ -1722,14 +1865,22 @@ class PrepareVideo:
                  top_view: int = 0,
                  bottom_views: Tuple[int, int] = (1, 2),
                  bottom_height_ratio: float = 0.5,
+                 combine_view_masks: bool = False,
+                 mask_key: str = 'img_masks',
+                 input_layout: str = 'auto',
                  *args,
                  **kwargs):
         assert tile_direction in ('vertical', 'horizontal', 'top_bottom_pair')
+        if input_layout not in ('auto', 'tchw', 'cthw'):
+            raise ValueError("input_layout must be 'auto', 'tchw', or 'cthw'.")
         if not (0 < bottom_height_ratio <= 1):
             raise ValueError('bottom_height_ratio must be in (0, 1].')
         self.num_views = num_views
         self.frame_window_size = frame_window_size
         self.tile_direction = tile_direction
+        self.combine_view_masks = bool(combine_view_masks)
+        self.mask_key = mask_key
+        self.input_layout = input_layout
         self.top_view = int(top_view)
         self.bottom_views = tuple(int(view) for view in bottom_views)
         self.bottom_height_ratio = float(bottom_height_ratio)
@@ -1773,6 +1924,32 @@ class PrepareVideo:
         return (torch.stack(frames, dim=1) if is_tensor else np.stack(
             frames, axis=1))
 
+    def _combine_masks(self, data: dict, num_frames: int) -> None:
+        if (not self.combine_view_masks or self.mask_key is None
+                or self.mask_key not in data):
+            return
+
+        masks = data[self.mask_key]
+        if torch.is_tensor(masks):
+            if masks.ndim != 1 or masks.numel() != self.num_views * num_frames:
+                return
+            data[self.mask_key] = masks.to(dtype=torch.bool).reshape(
+                self.num_views, num_frames).all(dim=0)
+            return
+
+        mask_array = np.asarray(masks)
+        if (mask_array.ndim != 1
+                or mask_array.size != self.num_views * num_frames):
+            return
+        combined = mask_array.astype(bool).reshape(self.num_views,
+                                                   num_frames).all(axis=0)
+        if isinstance(masks, list):
+            data[self.mask_key] = combined.tolist()
+        elif isinstance(masks, tuple):
+            data[self.mask_key] = tuple(combined.tolist())
+        else:
+            data[self.mask_key] = combined
+
     def __call__(self, data: dict):
         # Support both 'images' (training) and 'pixel_values' (eval) keys
         if 'images' in data:
@@ -1788,6 +1965,32 @@ class PrepareVideo:
 
         is_tensor = isinstance(images, torch.Tensor)
 
+        if images.ndim == 4:
+            layout = self.input_layout
+            if layout == 'auto':
+                if images.shape[1] == 3:
+                    layout = 'tchw'
+                elif images.shape[0] == 3:
+                    layout = 'cthw'
+                else:
+                    raise ValueError(
+                        'PrepareVideo cannot infer a 4D image layout from '
+                        f'{tuple(images.shape)}.')
+            if layout == 'cthw':
+                if images.shape[0] != 3:
+                    raise ValueError('PrepareVideo expected CTHW input, got '
+                                     f'{tuple(images.shape)}.')
+                return data
+            if images.shape[1] != 3:
+                raise ValueError('PrepareVideo expected TCHW input, got '
+                                 f'{tuple(images.shape)}.')
+            if is_tensor:
+                images = images.permute(1, 0, 2, 3).contiguous()
+            else:
+                images = np.ascontiguousarray(images.transpose(1, 0, 2, 3))
+            data[img_key] = images
+            return data
+
         if images.ndim == 5:
             # [V, T, C, H, W] multi-view temporal stack -> tiled video.
             # ``horizontal`` concatenates views along width; ``vertical``
@@ -1802,9 +2005,12 @@ class PrepareVideo:
             else:
                 axes = (2, 1, 0, 3, 4)  # -> [C, T, V, H, W]
                 out_shape = (c, t, v * h, w)
-            data[img_key] = (
-                images.permute(*axes).reshape(*out_shape) if is_tensor else
-                np.transpose(images, axes).reshape(*out_shape))
+            if is_tensor:
+                images = images.permute(*axes).reshape(*out_shape)
+            else:
+                images = np.transpose(images, axes).reshape(*out_shape)
+            data[img_key] = images
+            self._combine_masks(data, t)
             return data
 
         if images.ndim == 3:
@@ -1827,10 +2033,13 @@ class PrepareVideo:
                     else:
                         axes = (2, 1, 0, 3, 4)  # -> [3, T, V, H, W]
                         out_shape = (3, T, V * h, w)
-                    images = (
-                        images.permute(
-                            *axes) if is_tensor else images.transpose(*axes))
-                    data[img_key] = images.reshape(*out_shape)
+                    if is_tensor:
+                        images = images.permute(*axes)
+                    else:
+                        images = images.transpose(*axes)
+                    images = images.reshape(*out_shape)
+                    data[img_key] = images
+                    self._combine_masks(data, T)
                     return data
 
                 images = images.reshape(n_items, 3, h, w)
@@ -1848,6 +2057,7 @@ class PrepareVideo:
                     tiled = np.concatenate([images[i] for i in range(n_items)],
                                            axis=cat_dim)
                     data[img_key] = tiled[:, np.newaxis, :, :]
+                self._combine_masks(data, 1)
                 return data
 
             data[img_key] = (

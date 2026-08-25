@@ -39,8 +39,7 @@ FluxVLA Engine is a full-stack, end-to-end engineering platform for deploying em
 | FluxVLA(Cosmos3-Nano)       |                                                          96.0                                                           |                                                          99.6                                                           |                                                         94.0                                                          |                                                        98.0                                                         | [96.9](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/cosmos3_nano_libero_full_finetune_bs2048) |
 | FluxVLA(FastWAM)            |                                                          97.3                                                           |                                                          99.8                                                           |                                                         97.4                                                          |                                                        94.6                                                         |    [97.26](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_libero_full_finetune_bs16)    |
 | FluxVLA(PI0.5)              |  [98.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_spatial_full_finetune_bs64)   |   [99.6](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_object_full_finetune_bs64)   |   [98.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_goal_full_finetune_bs64)   | [95.6±1.0](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_libero_10_full_finetune_bs64) |                                                    97.95                                                     |
-
-*Linked scores point to the corresponding checkpoints.*
+| FluxVLA(DiT4DiT)            |                                                          96.20                                                          |                                                          99.60                                                          |                                                         99.20                                                         |                                                        99.60                                                        | [98.65](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/dit4dit_libero_all_full_finetune_bs256)  |
 
 #### RoboCasa GR1
 
@@ -143,6 +142,17 @@ dependency resolution; if no wheel is available, the installer falls back to
 conda. Set `FLUXVLA_AV_INSTALLER=conda` if you specifically want the
 conda-forge package.
 
+On Linux x86_64, the installer also installs `ffmpeg=7` from conda-forge
+before TorchCodec. TorchCodec needs FFmpeg shared libraries such as
+`libavutil.so.59`; the `imageio-ffmpeg` executable and the PyAV wheel do not
+replace those libraries. To repair an existing Torch 2.8 environment, run:
+
+```bash
+conda install -y -c conda-forge "ffmpeg=7"
+python -m pip install --force-reinstall "torchcodec==0.7.0"
+python -c "from torchcodec.decoders import VideoDecoder; print('TorchCodec OK')"
+```
+
 Real-robot runners still require the system ROS installation itself. On ROS
 Noetic machines, source ROS before launching inference:
 
@@ -202,18 +212,23 @@ bash scripts/update_env.sh
 
 Use `--skip-pull` if you already updated the checkout yourself, and
 `--skip-project` if you do not want to reinstall FluxVLA in editable mode.
+The updater refreshes the complete unified base dependency set, including the
+DiT4DiT-compatible Diffusers revision, `peft==0.19.1`, and `av==14.2.0`.
 
 <details>
 <summary><b>Equivalent manual commands</b></summary>
 
 ```bash
 git pull
-python -m pip install --upgrade "transformers==5.3.0" "datasets==4.0.0"
+conda install -y -c conda-forge "ffmpeg=7"
+python -m pip install --upgrade -r requirements-base.txt
+python -m pip install --upgrade --only-binary=:all: "av==14.2.0"
+python -m pip install --upgrade "torchcodec==0.7.0"  # Torch 2.8; use 0.2.1 for Torch 2.6
 python -m pip install "mujoco==3.2.6" gymnasium lxml bddl==1.0.1 hydra-core==1.2.0 robomimic==0.2.0
 python -m pip install --force-reinstall --no-deps "libero @ git+https://github.com/yinchimaoliang/LIBERO.git@058fda1ddebe92918af091cb6816759ca6d003f0"
 python -m pip install --force-reinstall --no-deps "robosuite @ git+https://github.com/yinchimaoliang/robosuite.git@e293cc32ff3c48957a4ebcad09952432b0dc9049"
 python -m pip install --no-build-isolation -e .
-python -c "import transformers; print(transformers.__version__)"
+python -c "import av, diffusers, peft, transformers; from diffusers import Cosmos2_5_PredictBasePipeline; print(av.__version__, diffusers.__version__, peft.__version__, transformers.__version__)"
 ```
 
 </details>
@@ -303,10 +318,10 @@ PyTorch upgrade, reinstall a matching FlashAttention wheel.
 </details>
 
 <details>
-<summary><b>4. Install av</b></summary>
+<summary><b>4. Install FFmpeg and av</b></summary>
 
 ```bash
-conda install -c conda-forge av=14.4.0
+conda install -c conda-forge "ffmpeg=7" av=14.2.0
 ```
 
 </details>
@@ -325,6 +340,8 @@ pip install --no-build-isolation -e .
 > TorchCodec is also installed by the environment scripts because its version
 > must match PyTorch. For a manual x86_64 install, use
 > `torchcodec==0.7.0` with Torch 2.8 or `torchcodec==0.2.1` with Torch 2.6.
+> TorchCodec also requires the conda/system FFmpeg shared libraries; PyAV and
+> `imageio-ffmpeg` alone are not sufficient.
 > Linux aarch64 uses the PyAV fallback.
 
 </details>
@@ -787,6 +804,7 @@ For ARM and SARM workflows, you typically need a CLIP checkpoint for training / 
 | GR00T N1.5              | 3B   | [🤗 Hugging Face](https://huggingface.co/nvidia/GR00T-N1.5-3B/tree/main)                                                             |
 | OpenVLA                 | 7B   | [🤗 Hugging Face](https://huggingface.co/openvla/openvla-7b)                                                                         |
 | FastWAM_base            | 5B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                          |
+| Cosmos-Predict2.5-2B    | 2B   | [🤗 Hugging Face](https://huggingface.co/nvidia/Cosmos-Predict2.5-2B)                                                                |
 | PI0_base                | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                              |
 | PI05_base               | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                             |
 | PI05_libero             | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                           |
@@ -799,6 +817,35 @@ Download the PI0.5 RoboCasa full-data checkpoint while preserving the path expec
 hf download limxdynamics/FluxVLAEngine \
   --include "pi05_paligemma_robocasa_full_data_full_finetune_bs256/*" \
   --local-dir ./checkpoints
+```
+
+DiT4DiT requires the
+[Cosmos-Predict2.5-2B](https://huggingface.co/nvidia/Cosmos-Predict2.5-2B)
+Diffusers checkpoint. Download the exact revision and directory layout expected by
+`configs/dit4dit/dit4dit_libero_all_full_finetune.py`:
+
+```bash
+hf download nvidia/Cosmos-Predict2.5-2B \
+  --revision diffusers/base/post-trained \
+  --local-dir ./checkpoints/Cosmos-Predict2.5-2B
+```
+
+Download the FluxVLA DiT4DiT LIBERO checkpoint linked in the performance table:
+
+```bash
+hf download limxdynamics/FluxVLAEngine \
+  --include "dit4dit_libero_all_full_finetune_bs256/*" \
+  --local-dir ./checkpoints
+```
+
+The [official DiT4DiT LIBERO checkpoint](https://huggingface.co/mondo-robotics/dit4dit-model/tree/main/dit4dit_libero)
+is optional for the default train-from-Cosmos recipe. Download it when reproducing the released model or
+when setting `model.pretrained_name_or_path` to `_official_dit4dit_ckpt`:
+
+```bash
+hf download mondo-robotics/dit4dit-model \
+  --include "dit4dit_libero/*" \
+  --local-dir ./checkpoints/dit4dit-model
 ```
 
 </details>
@@ -860,7 +907,7 @@ If you use VLM-based SARM annotation, place the official SARM VLM under `./check
 <details>
 <summary><b>Supports different VLA models</b></summary>
 
-- Supports OpenVLA, LlavaVLA, Gr00t, Pi0, Pi0.5, and FastWAM.
+- Supports OpenVLA, LlavaVLA, Gr00t, Pi0, Pi0.5, FastWAM, and DiT4DiT.
 
 </details>
 
@@ -1063,7 +1110,7 @@ export HF_ENDPOINT="https://hf-mirror.com"
 <b>A:</b> You can use the `libmamba` solver to speed up dependency resolution:
 
 ```bash
-conda install -c conda-forge av=14.4.0 --solver=libmamba
+conda install -c conda-forge av=14.2.0 --solver=libmamba
 ```
 
 </details>
