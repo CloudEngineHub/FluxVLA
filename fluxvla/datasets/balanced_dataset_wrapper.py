@@ -66,6 +66,7 @@ class DistributedBalancedRepeatingDataset(DistributedRepeatingDataset):
         dataset_statistics: Optional[Dict] = None,
         statistics_overrides: Optional[Dict] = None,
         dataset_statistics_path: Optional[str] = None,
+        auto_compute_statistics: Optional[Dict] = None,
         epoch_size: Optional[int] = None,
     ) -> None:
         super().__init__(
@@ -80,6 +81,7 @@ class DistributedBalancedRepeatingDataset(DistributedRepeatingDataset):
             dataset_statistics=dataset_statistics,
             statistics_overrides=statistics_overrides,
             dataset_statistics_path=dataset_statistics_path,
+            auto_compute_statistics=auto_compute_statistics,
         )
         if self.is_grouped:
             raise ValueError(
@@ -218,8 +220,7 @@ class DistributedBalancedRepeatingDataset(DistributedRepeatingDataset):
         if world_size <= 0:
             raise ValueError('`world_size` must be positive.')
         if rank < 0 or rank >= world_size:
-            raise ValueError(
-                f'`rank` must be in [0, {world_size}), got {rank}.')
+            raise ValueError(f'rank must be in [0, {world_size}), got {rank}.')
         if self.sampling_probabilities is not None:
             return self._ordered_virtual_indices(epoch)[rank::world_size]
         positions = np.arange(rank, self.total_len, world_size, dtype=np.int64)

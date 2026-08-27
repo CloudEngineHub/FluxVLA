@@ -46,7 +46,8 @@ FluxVLA Engine是面向具身智能落地应用的全链路一体化工程平台
 | 模型           | 训练数据             | Cabinet | Drawer | Microwave | Generalization | Average                                                                                                                                         |
 | -------------- | -------------------- | ------- | ------ | --------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | FluxVLA(GR00T) | 24 个任务，30 条演示 | 22.7%   | 35.7%  | 32.5%     | 48.9%          | [44.3%(50trials)](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/gr00t_eagle_3b_robocasa_gr1_24x30_finetune_bs64)                  |
-| FluxVLA(PI0.5) | 24 个任务，全量数据  | 60.00%  | 51.00% | 52.00%    | 47.44%         | [49.17%（每任务 50 次试验）](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
+| FluxVLA(PI0)   | 24 个任务，全量数据  | 60.00%  | 56.00% | 48.00%    | 49.33%         | [51.00%（每任务 50 次试验）](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_robocasa_full_data_full_finetune_bs256)  |
+| FluxVLA(PI0.5) | 24 个任务，全量数据  | 60.00%  | 51.00% | 52.00%    | 50.44%         | [51.42%（每任务 50 次试验）](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
 
 #### 说明
 
@@ -504,84 +505,94 @@ huggingface-cli download limxdynamics/FluxVLAData \
 </details>
 
 <details>
-<summary><b>计算 PI0.5 归一化统计量</b></summary>
+<summary><b>计算变换后的归一化统计量</b></summary>
 
-当 PI0.5 的训练数据、机器人动作语义、动作窗口长度或末尾 padding
-策略发生变化时，需要重新计算归一化统计量。请在 FluxVLA 仓库根目录下进入项目环境后运行：
+当训练数据、机器人动作语义、动作窗口长度或末尾 padding 策略发生变化时，
+需要重新计算归一化统计量。自动训练流程与命令行工具调用的是同一套实现，
+因此在 profile 和数据集设置相同时会生成相同的统计量。
+
+对于通过 `auto_compute_statistics` 启用自动统计的配置，启动时按以下优先级处理：
+
+1. 如果提供了内嵌的 `dataset_statistics`，则直接使用；
+2. 否则，如果提供了 `dataset_statistics_path`，则从该路径加载；
+3. 否则，仅在 rank 0 上计算一次变换后的统计量，并将
+   `dataset_statistics.json` 和 `dataset_statistics_metadata.json` 保存到工作目录。
+
+PI0.5 的 UR3、双臂 Franka 和 Tron2 训练配置使用该自动流程。
+ALOHA 配置则在训练归一化和动作反归一化中统一使用 OpenPI PI0.5 的
+Trossen 官方统计量：
+`gs://openpi-assets/checkpoints/pi05_base/assets/trossen/norm_stats.json`。
+RoboCasa 保留数据集专用的内置统计量，以避免每次启动时扫描完整数据集。
+如需在仓库根目录手动计算数据集专用统计量：
 
 ```bash
 conda activate fluxvla
 
-# ALOHA：关节使用相对动作，夹爪使用绝对动作。
-python tools/compute_pi05_norm_stats.py /path/to/aloha \
-  --profile aloha --action-key observation.state \
-  --gripper-input-range=-0.01,0.08 --action-horizon 50 \
-  --variable-name _PI05_ALOHA_STATS --output /tmp/aloha_stats.py
-
 # UR3：六个关节使用相对动作，夹爪使用绝对动作。
-python tools/compute_pi05_norm_stats.py /path/to/ur3 \
+python tools/compute_transformed_dataset_stats.py /path/to/ur3 \
   --profile ur3 --action-horizon 50 \
   --variable-name _PI05_UR3_STATS --output /tmp/ur3_stats.py
 
 # 双臂 Franka 关节位置：关节使用相对动作，夹爪使用绝对动作。
-python tools/compute_pi05_norm_stats.py /path/to/franka \
+python tools/compute_transformed_dataset_stats.py /path/to/franka \
   --profile franka-qpos --action-horizon 50 \
   --variable-name _PI05_FRANKA_QPOS_STATS \
   --output /tmp/franka_qpos_stats.py
 
 # 双臂 Franka 笛卡尔位姿：全部使用绝对动作。
-python tools/compute_pi05_norm_stats.py /path/to/franka \
+python tools/compute_transformed_dataset_stats.py /path/to/franka \
   --profile franka-eepose --action-horizon 50 \
   --variable-name _PI05_FRANKA_EEPOSE_STATS \
   --output /tmp/franka_eepose_stats.py
 
+# Tron2：机械臂、头部和夹爪均使用绝对 qpos 目标。
+python tools/compute_transformed_dataset_stats.py /path/to/tron2 \
+  --profile tron2 --action-horizon 50 \
+  --variable-name _TRON2_STATS --output /tmp/tron2_stats.py
+
 # RoboCasa GR1：双臂和腰部关节使用相对动作，Fourier 手部命令保持绝对值。
-python tools/compute_pi05_norm_stats.py /path/to/robocasa_lerobot_V2.1 \
+python tools/compute_transformed_dataset_stats.py /path/to/robocasa_lerobot_V2.1 \
   --profile robocasa-joint-delta --action-horizon 16 \
   --statistic-name robocasa_gr1_24tasks_joint_delta \
   --variable-name _PI05_ROBOCASA_STATS \
   --output /tmp/pi05_robocasa_joint_delta_stats.py
 ```
 
-脚本会依次执行机器人坐标系/符号转换、对指定动作维度进行相对动作转换，然后计算统计量。默认输出是包含
-`mean`、`std`、`min`、`max`、`q01` 和 `q99` 的 Python
-字面量；将其复制到对应配置中，并通过 `dataset_statistics` 传入。PI0.5 使用
-`q01`/`q99` 分位数归一化。
+该工具会先执行配置的机器人坐标系/符号转换，再仅将指定动作维度转换为相对量，
+最后计算统计量。完全使用绝对动作的策略可以使用 `--profile absolute` 或
+`--no-delta`；例如，如果 GR00T 策略的动作列已经是绝对 qpos，可以配置
+`auto_compute_statistics=dict(profile='absolute')`。数据集字段不同时，可覆盖
+`state_key` 或 `action_key`。
 
-例如，生成 `/tmp/aloha_stats.py` 后，需要将其中完整的
-`_PI05_ALOHA_STATS = {...}` 定义复制到
-`configs/pi05/pi05_paligemma_aloha_full_finetune.py`，替换原有定义，并确保训练与动作反归一化使用同一个变量：
+输出包含 `mean`、`std`、`min`、`max`、`q01` 和 `q99`，因此可用于
+mean/std、min/max 或 PI0.5 分位数归一化。自动计算会直接继承训练配置中的
+`action_window_size`、`window_start_idx`、`supervise_terminal_padding` 和
+`statistic_name`。
 
-```python
-# 将 /tmp/aloha_stats.py 生成的内容粘贴到这里。
-_PI05_ALOHA_STATS = {
-    # 生成的统计量字典。
-}
+为保持与 OpenPI 对齐，不要使用本地训练集重新生成 ALOHA 统计量。
+仓库中的 `_PI05_ALOHA_STATS` 是 PI0.5 Trossen 官方资产的直接副本。
+只有在使用不同 ALOHA 标定或数据域、并有意采用数据集专用统计量时，
+才应生成替换值：
 
-train_dataloader = dict(
-    dataset=dict(
-        dataset_statistics=_PI05_ALOHA_STATS,
-        # 其他数据集配置...
-    ),
-)
-
-eval = dict(
-    denormalize_action=dict(
-        norm_stats=_PI05_ALOHA_STATS,
-        # 其他动作后处理配置...
-    ),
-)
+```bash
+python tools/compute_transformed_dataset_stats.py /path/to/aloha \
+  --profile aloha --action-key observation.state \
+  --gripper-input-range=-0.01,0.08 --action-horizon 50 \
+  --variable-name _PI05_ALOHA_STATS --output /tmp/aloha_stats.py
 ```
 
-UR3、Franka 和 RoboCasa 同理：将生成的变量定义复制到对应 config，并替换
-`dataset_statistics` 所使用的变量。如果评测配置直接引用了归一化统计量，也需要同步替换为新生成的统计量。
+覆盖官方统计量时，必须将同一份替换字典同时用于
+`train_dataloader.dataset.dataset_statistics` 和
+`inference.denormalize_action.norm_stats`。
+
+旧的 `tools/compute_pi05_norm_stats.py` 命令仍然保留，作为通用工具的兼容包装入口。
 
 默认会包含末尾 padding。若配置在 loss 中屏蔽了 padding 动作，请添加
 `--exclude-terminal-padding`。动作窗口起点默认为 `0`；只有配置有意使用其他偏移时才需要设置
 `--window-start-index`。处理大型数据集时，可使用
 `--temp-dir /path/with/free-space` 将临时内存映射文件放到空间充足的磁盘。
 
-运行 `python tools/compute_pi05_norm_stats.py --help` 可查看可用 profile，
+运行 `python tools/compute_transformed_dataset_stats.py --help` 可查看可用 profile，
 以及自定义状态/动作字段、相对动作 mask 等覆盖选项。
 
 </details>
@@ -727,15 +738,17 @@ huggingface-cli download limxdynamics/FluxVLAData --repo-type dataset --include 
 | FastWAM_base              | 5B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/fastwam_base)                                          |
 | Cosmos-Predict2.5-2B      | 2B   | [🤗 Hugging Face](https://huggingface.co/nvidia/Cosmos-Predict2.5-2B)                                                                |
 | PI0_base                  | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_base)                                              |
+| PI0 RoboCasa（全量数据）  | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi0_paligemma_robocasa_full_data_full_finetune_bs256)  |
 | PI05_base                 | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_base)                                             |
 | PI05_libero               | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_libero)                                           |
 | PI05 RoboCasa（全量数据） | 3B   | [🤗 Hugging Face](https://huggingface.co/limxdynamics/FluxVLAEngine/tree/main/pi05_paligemma_robocasa_full_data_full_finetune_bs256) |
 | SmolVLA                   | 450M | [🤗 Hugging Face](https://huggingface.co/lerobot/smolvla_base)                                                                       |
 
-按 config 预期的目录结构下载 PI0.5 RoboCasa 全量数据 checkpoint：
+按各自 config 预期的目录结构下载 PI0 和 PI0.5 RoboCasa 全量数据 checkpoint：
 
 ```bash
 hf download limxdynamics/FluxVLAEngine \
+  --include "pi0_paligemma_robocasa_full_data_full_finetune_bs256/*" \
   --include "pi05_paligemma_robocasa_full_data_full_finetune_bs256/*" \
   --local-dir ./checkpoints
 ```

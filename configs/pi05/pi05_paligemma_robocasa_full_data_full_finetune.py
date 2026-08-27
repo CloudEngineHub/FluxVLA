@@ -374,7 +374,8 @@ def _robocasa_task_env(task_name):
 # The full dataset contains about 1,000 episodes for each of 24 tasks (6 seen
 # and 18 novel), one 256x256 ego-view camera, 29-dimensional robot states,
 # relative arm/waist targets, absolute Fourier-hand commands, and fixed
-# q01/q99 quantile statistics shared with eval.
+# q01/q99 quantile normalization shared with eval. The checked-in statistics
+# below were computed from these exact training roots.
 train_dataloader = dict(
     # 8 samples/GPU x 32 GPUs x 1 accumulation step = global batch 256.
     per_device_batch_size=8,
@@ -392,8 +393,10 @@ train_dataloader = dict(
         },
         statistic_keys=['observation.state', 'timestamp', 'action'],
         statistic_name=_ROBOCASA_STATISTIC_NAME,
-        # Use q01/q99 computed from these exact 24 full-data roots and
-        # their supervised 16-step terminal padding.
+        # Use the checked-in q01/q99 statistics computed from these exact
+        # 24 full-data roots and their supervised 16-step terminal padding.
+        # Keeping them explicit avoids scanning the full RoboCasa dataset at
+        # every training startup.
         dataset_statistics=_PI05_ROBOCASA_STATS,
         datasets=dict(
             type='ParquetDataset',
@@ -475,8 +478,8 @@ train_dataloader = dict(
                 # 29D state, matching OpenPI.
                 dict(
                     type='NormalizeStatesAndActions',
-                    action_dim=32,  # Zero-pad to the model action dimension.
-                    state_dim=29,
+                    action_dim=None,
+                    state_dim=None,
                     state_key='proprio',
                     action_key='action',
                     norm_type='quantile',
@@ -484,7 +487,6 @@ train_dataloader = dict(
                 # Build the OpenPI-compatible state-conditioned prompt.
                 dict(
                     type='PreparePromptWithState',
-                    max_state_dim=29,
                     lowercase_task_description=False,
                     add_action_prefix=True),
                 # Tokenize the prompt.
@@ -495,6 +497,7 @@ train_dataloader = dict(
                         type='PretrainedTokenizer',
                         model_path=_PI05_TOKENIZER,
                     )),
+                dict(type='PadStatesAndActions', model_action_dim=32),
                 # Resize to 224 and apply the crop/color augmentations used by
                 # the RoboCasa training recipe.
                 dict(type='RandomCropImages', scale=0.95),
@@ -672,14 +675,13 @@ eval = dict(
                 value_range='tanh'),
             dict(
                 type='NormalizeStatesAndActions',
-                state_dim=29,
+                state_dim=None,
                 state_key='proprio',
                 action_key='action',
                 norm_type='quantile',
                 output_dtype='float32'),
             dict(
                 type='PreparePromptWithState',
-                max_state_dim=29,
                 lowercase_task_description=False,
                 add_action_prefix=True),
             dict(
@@ -687,6 +689,7 @@ eval = dict(
                 max_len=200,
                 tokenizer=dict(
                     type='PretrainedTokenizer', model_path=_PI05_TOKENIZER)),
+            dict(type='PadStatesAndActions', model_action_dim=32),
         ]),
     denormalize_action=dict(
         type='DenormalizeDeltaAction',
