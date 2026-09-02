@@ -429,6 +429,10 @@ class NormalizeStatesAndActions:
             to [-1, 1]. Defaults to False.
         normalize_states (bool): Whether to normalize states before optional
             padding/truncation. Defaults to True.
+        zero_constant_min_max_dims (bool): If True, map dimensions whose
+            min/max statistics are identical to zero. This matches GR00T's
+            min-max transform and avoids division by zero. Defaults to False
+            to preserve existing normalization behavior.
         preserve_input_dtype (bool): Keep normalization arithmetic in the
             input array dtype even when ``output_dtype`` is configured.
         output_dtype (str | None): Optional NumPy dtype used for normalization
@@ -459,6 +463,7 @@ class NormalizeStatesAndActions:
                  normalization_epsilon: float = 1e-6,
                  preserve_input_dtype: bool = False,
                  normalize_states: bool = True,
+                 zero_constant_min_max_dims: bool = False,
                  discrete_action_dims: List[int] = None,
                  discrete_state_dims: List[int] = None,
                  discrete_norm_type: str = 'min_max',
@@ -482,6 +487,7 @@ class NormalizeStatesAndActions:
         self.normalization_epsilon = float(normalization_epsilon)
         self.preserve_input_dtype = bool(preserve_input_dtype)
         self.normalize_states = normalize_states
+        self.zero_constant_min_max_dims = bool(zero_constant_min_max_dims)
         self.output_dtype = (None if output_dtype is None else
                              np.dtype(output_dtype))
         if (self.output_dtype is not None
@@ -523,10 +529,14 @@ class NormalizeStatesAndActions:
             self.delta_action_dim_mask = None
 
     def __call__(self, data: Dict) -> Dict:
-        states = np.asarray(data['states'], dtype=np.float32)
+        states = (
+            np.asarray(data['states']) if self.preserve_input_dtype else
+            np.asarray(data['states'], dtype=np.float32))
         actions = None
         if self.action_key is not None and 'actions' in data:
-            actions = np.asarray(data['actions'], dtype=np.float32)
+            actions = (
+                np.asarray(data['actions']) if self.preserve_input_dtype else
+                np.asarray(data['actions'], dtype=np.float32))
             if (self.action_norm_mask is not None
                     and len(self.action_norm_mask) != actions.shape[-1]):
                 raise ValueError(
@@ -691,7 +701,14 @@ class NormalizeStatesAndActions:
         low = self._statistics_array(stats['min'], x)
         high = self._statistics_array(stats['max'], x)
         epsilon = self._typed_epsilon(x)
-        normalized = (x - low) / (high - low + epsilon) * 2.0 - 1.0
+        value_range = high - low
+        if self.zero_constant_min_max_dims:
+            valid_range = value_range != 0
+            safe_range = np.where(valid_range, value_range + epsilon, 1.0)
+            normalized = (x - low) / safe_range * 2.0 - 1.0
+            normalized = np.where(valid_range, normalized, 0.0)
+        else:
+            normalized = (x - low) / (value_range + epsilon) * 2.0 - 1.0
         if self.clip_norm:
             normalized = np.clip(normalized, -1, 1)
         return np.where(norm_mask, normalized, x)
