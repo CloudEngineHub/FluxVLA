@@ -379,9 +379,13 @@ class PI0FlowMatching(BaseVLA):
             bsize, action_time_dim, dtype=torch.bool, device=device)
         pad_masks.append(action_time_mask)
 
-        # Set attention masks so that image, language and state
-        # inputs do not attend to action tokens
-        att_masks += [1] + ([0] * (self.n_action_steps - 1))
+        # Set attention masks so that image, language and state inputs do not
+        # attend to action tokens.  Use the runtime horizon rather than the
+        # configured default: training/evaluation may provide a shorter
+        # action window (for example, a truncated episode).
+        if action_time_dim == 0:
+            raise ValueError('noisy_actions must contain at least one step')
+        att_masks += [1] + ([0] * (action_time_dim - 1))
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
@@ -458,7 +462,6 @@ class PI0FlowMatching(BaseVLA):
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin)
 
-            batch_size = query_states.shape[0]
             scaling = self.llm_backbone.layers[layer_idx].self_attn.scaling
 
             att_output, _ = self.attention_interface(
@@ -469,8 +472,11 @@ class PI0FlowMatching(BaseVLA):
                 attention_masks,
                 scaling,
             )
-            head_dim = self.llm_backbone.layers[layer_idx].self_attn.head_dim
-            att_output = att_output.reshape(batch_size, -1, 1 * 8 * head_dim)
+            # Attention helpers return [B, L, H, D].  Flatten the actual
+            # number of query heads instead of assuming the eight-head
+            # PaliGemma configuration, so alternate Gemma widths retain the
+            # correct input size for each model's output projection.
+            att_output = att_output.flatten(start_dim=2)
 
             outputs_embeds = []
             start_pos = 0
@@ -706,7 +712,8 @@ class PI0FlowMatching(BaseVLA):
             fill_kv_cache=fill_kv_cache,
             adarms_cond=[None, adarms_cond],
             time=time)
-        suffix_out = suffix_out[:, -self.n_action_steps:]
+        action_time_dim = x_t.shape[1]
+        suffix_out = suffix_out[:, -action_time_dim:]
         # Original openpi code, upcast attention output
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self._project_action_output(suffix_out)
@@ -910,7 +917,8 @@ class PI0FlowMatching(BaseVLA):
             inputs_embeds=[None, suffix_embs],
             use_cache=False,
             adarms_cond=[None, adarms_cond])
-        suffix_out = suffix_out[:, -self.n_action_steps:]
+        action_time_dim = x_t.shape[1]
+        suffix_out = suffix_out[:, -action_time_dim:]
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self._project_action_output(suffix_out)
         return v_t
